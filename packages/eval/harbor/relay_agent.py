@@ -46,54 +46,70 @@ class RelayAgent(BaseAgent):
             environment.exec(scoped_command, cwd=request["cwd"], env=request["env"])
         )
         control = asyncio.create_task(reader.readline())
-        done, _ = await asyncio.wait({execution, control}, return_when=asyncio.FIRST_COMPLETED)
-        if control in done:
-            cancellation = json.loads(control.result())
-            if cancellation.get("token") != self._token or cancellation.get("kind") != "cancel":
-                raise RuntimeError("invalid Maka Eval relay control")
-            cancel = request.get("cancel")
-            if isinstance(cancel, dict):
-                with contextlib.suppress(BaseException):
-                    await environment.exec(
-                        shlex.join([cancel["command"], *cancel["args"]]),
-                        cwd=request["cwd"],
-                        env=request["env"],
-                    )
-            with contextlib.suppress(BaseException):
-                await environment.exec(
-                    f"kill -TERM -- -$(cat {shlex.quote(scope_path)})",
-                    cwd=request["cwd"],
-                )
-            try:
-                await asyncio.wait_for(asyncio.shield(execution), timeout=10)
-            except TimeoutError:
-                with contextlib.suppress(BaseException):
-                    await environment.exec(
-                        f"kill -KILL -- -$(cat {shlex.quote(scope_path)})",
-                        cwd=request["cwd"],
-                    )
-                with contextlib.suppress(BaseException):
-                    await execution
-            return_code, stdout = 130, ""
-        else:
+        try:
+            done, _ = await asyncio.wait(
+                {execution, control}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if control in done:
+                cancellation = json.loads(control.result())
+                if cancellation.get("token") != self._token or cancellation.get("kind") != "cancel":
+                    raise RuntimeError("invalid Maka Eval relay control")
+                await _settle(environment, request, scope_path, execution)
+                return_code, stdout = 130, ""
+            else:
+                result = execution.result()
+                return_code, stdout = result.return_code, result.stdout or ""
+            await _send(
+                writer,
+                {
+                    "token": self._token,
+                    "kind": "executed",
+                    "exitCode": return_code,
+                    "stdout": stdout,
+                },
+            )
+        except BaseException:
+            await _settle(environment, request, scope_path, execution)
+            raise
+        finally:
             control.cancel()
             with contextlib.suppress(BaseException):
                 await control
-            result = execution.result()
-            return_code, stdout = result.return_code, result.stdout or ""
-        await _send(
-            writer,
-            {
-                "token": self._token,
-                "kind": "executed",
-                "exitCode": return_code,
-                "stdout": stdout,
-            },
-        )
-        writer.close()
-        await writer.wait_closed()
+            writer.close()
+            await writer.wait_closed()
 
 
 async def _send(writer: asyncio.StreamWriter, value: object) -> None:
     writer.write((json.dumps(value, separators=(",", ":")) + "\n").encode())
     await writer.drain()
+
+
+async def _settle(environment: Any, request: dict[str, Any], scope_path: str, execution: Any) -> None:
+    if execution.done():
+        return
+    cancel = request.get("cancel")
+    if isinstance(cancel, dict):
+        with contextlib.suppress(Exception):
+            await environment.exec(
+                shlex.join([cancel["command"], *cancel["args"]]),
+                cwd=request["cwd"],
+                env=request["env"],
+                timeout_sec=10,
+            )
+    with contextlib.suppress(Exception):
+        await environment.exec(
+            f"kill -TERM -- -$(cat {shlex.quote(scope_path)})",
+            cwd=request["cwd"],
+            timeout_sec=10,
+        )
+    try:
+        await asyncio.wait_for(asyncio.shield(execution), timeout=10)
+    except TimeoutError:
+        with contextlib.suppress(Exception):
+            await environment.exec(
+                f"kill -KILL -- -$(cat {shlex.quote(scope_path)})",
+                cwd=request["cwd"],
+                timeout_sec=10,
+            )
+        execution.cancel()
+        await asyncio.wait({execution}, timeout=1)
