@@ -386,7 +386,7 @@ function sanitizeFactLine(line: string): string {
 
 function sanitizePath(value: string): string | undefined {
   const path = value.replace(/[.,;:)>\]}]+$/, '').trim();
-  if (path.length < 3 || path.length > 180 || isLowSignalInternalPath(path)) return undefined;
+  if (path.length < 3 || path.length > 180) return undefined;
   return path;
 }
 
@@ -405,10 +405,6 @@ function isLowSignalRawLogLine(line: string): boolean {
     /\braw\b.*\b(log|output|noise|spam)\b/i.test(line) ||
     /do[_-]?not[_-]?leak/i.test(line)
   );
-}
-
-function isLowSignalInternalPath(path: string): boolean {
-  return /\/runtime-events\.jsonl$/.test(path) || /\/events\.jsonl$/.test(path);
 }
 
 function sortedSelectedEntries(selection: SelectedFactSource): FactSourceEntry[] {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -44,14 +45,20 @@ test('experiment attempt authority admits only one writer', async () => {
   await second.runExclusive(async () => {});
 });
 
-test('unpublished temporary records cannot poison immutable attempt history', async () => {
+test('attempt records are published only after their complete temporary write', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-attempt-recovery-'));
   const store = new FileAttemptStore(join(root, 'attempts'));
   const first = attempt(1, 'completed');
   await store.append(first);
-  await writeFile(join(store.path, 'interrupted.tmp'), '{');
+  const cellDirectory = join(store.path, createHash('sha256').update(first.cellId).digest('hex'));
+  await writeFile(join(cellDirectory, '000002.interrupted.tmp'), '{');
 
   assert.deepEqual(await store.list(first.cellId), [first]);
+  await store.append(attempt(2, 'completed'));
+  assert.deepEqual(
+    (await readdir(cellDirectory)).filter((name) => name.endsWith('.tmp')),
+    ['000002.interrupted.tmp'],
+  );
 });
 
 test('attempt records contain only the result kernel fields', async () => {

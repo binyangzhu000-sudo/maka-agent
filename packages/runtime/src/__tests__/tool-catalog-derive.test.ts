@@ -28,7 +28,7 @@ describe('projectEffectiveProductToolSurface', () => {
         tool('agent_spawn'),
         tool('agent_list'),
         tool('agent_output'),
-        tool('benchmark_progress'),
+        tool('custom_progress'),
         tool('mcp__server__tool'),
       ],
       policy: {
@@ -39,7 +39,7 @@ describe('projectEffectiveProductToolSurface', () => {
 
     assert.deepEqual(
       surface.tools.map((candidate) => candidate.name),
-      ['Bash', 'Read', 'benchmark_progress', 'mcp__server__tool'],
+      ['Bash', 'Read', 'custom_progress', 'mcp__server__tool'],
     );
   });
 
@@ -53,7 +53,7 @@ describe('projectEffectiveProductToolSurface', () => {
         tool('agent_spawn'),
         tool('agent_list'),
         tool('agent_output'),
-        tool('benchmark_progress'),
+        tool('custom_progress'),
         tool('mcp__server__tool'),
       ],
       policy: {
@@ -64,13 +64,13 @@ describe('projectEffectiveProductToolSurface', () => {
 
     assert.deepEqual(
       surface.tools.map((candidate) => candidate.name),
-      ['Read', 'browser_navigate', 'browser_click', 'benchmark_progress', 'mcp__server__tool'],
+      ['Read', 'browser_navigate', 'browser_click', 'custom_progress', 'mcp__server__tool'],
     );
     assert.deepEqual([...surface.toolNames].sort(), [
       'Read',
-      'benchmark_progress',
       'browser_click',
       'browser_navigate',
+      'custom_progress',
       'mcp__server__tool',
     ]);
     assert.deepEqual([...surface.hostCapabilities.toolNames].sort(), [...surface.toolNames].sort());

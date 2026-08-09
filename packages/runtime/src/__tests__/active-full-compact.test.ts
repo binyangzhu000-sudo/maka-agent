@@ -461,6 +461,8 @@ describe('active full compact PR1 foundation', () => {
     const messages = textMessages([
       'Created /workspace/result.json with the final user-requested report.',
       'Created /workspace/runs/sessions/report.json for the user.',
+      'Created /workspace/events.jsonl for the user-requested export.',
+      'Created /workspace/runtime-events.jsonl for the user-requested export.',
       'recent anchor',
     ]);
     const index = buildActiveFullCompactSourceIndex({
@@ -489,8 +491,10 @@ describe('active full compact PR1 foundation', () => {
     });
 
     assert.deepEqual(summary.artifactPaths, [
+      '/workspace/events.jsonl',
       '/workspace/result.json',
       '/workspace/runs/sessions/report.json',
+      '/workspace/runtime-events.jsonl',
     ]);
   });
 

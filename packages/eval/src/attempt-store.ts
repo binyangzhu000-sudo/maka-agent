@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, mkdir, open, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { JsonObject } from './experiment.js';
 import type { CellAttempt, EvalResultStatus, NormalizedUsage } from './result.js';
@@ -57,11 +57,16 @@ export class FileAttemptStore implements AttemptStore {
     const directory = this.#cellDirectory(canonical.cellId);
     await mkdir(directory, { recursive: true });
     const recordPath = join(directory, `${String(canonical.sequence).padStart(6, '0')}.json`);
+    const temporaryPath = `${recordPath}.${randomUUID()}.tmp`;
     try {
-      await writeFile(recordPath, `${JSON.stringify(canonical)}\n`, {
-        encoding: 'utf8',
-        flag: 'wx',
-      });
+      const temporary = await open(temporaryPath, 'wx');
+      try {
+        await temporary.writeFile(`${JSON.stringify(canonical)}\n`, 'utf8');
+        await temporary.sync();
+      } finally {
+        await temporary.close();
+      }
+      await link(temporaryPath, recordPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         throw new Error(
@@ -69,6 +74,10 @@ export class FileAttemptStore implements AttemptStore {
         );
       }
       throw error;
+    } finally {
+      await unlink(temporaryPath).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
     }
   }
 
