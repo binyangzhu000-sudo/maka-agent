@@ -5,9 +5,9 @@
 // WHY: an unbounded tool result either floods the model's context (a chatty
 // command's full output) or, worse, gets discarded outright when a hard byte
 // cap is hit (the old Bash behavior threw away *all* output past 10MB, failing
-// otherwise-finished work). Both hurt pass@1. This bounds what the model sees
-// to a line/byte budget, keeps the most useful slice, and tells the model the
-// output was cut and how to recover the rest.
+// otherwise-finished work). Both hurt completion reliability. This bounds what
+// the model sees to a line/byte budget, keeps the most useful slice, and tells
+// the model the output was cut and how to recover the rest.
 //
 // This helper does not own a spill-file lifecycle. Instead the truncation
 // marker points the model at portable recovery — re-run the command (only when
