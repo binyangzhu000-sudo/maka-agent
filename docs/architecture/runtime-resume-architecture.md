@@ -928,7 +928,6 @@ The two most important follow-ups are:
 - [RecoveryResolver ADR](./runtime-recovery-resolver-adr.zh-CN.md)
 - [Runtime Resume Phase 3–4 implementation route](./runtime-resume-phase3-phase4-workspace-checkpoint-design.zh-CN.md)
 - [Runtime Resume extraction ledger](./runtime-resume-extraction-ledger.zh-CN.md)
-- [Runtime Resume and Tool Journal design draft](../runtime-resume-tool-journal-design-draft.zh-CN.md)
 - [Chapter 1: Log Is the Runtime](./runtime-core-architecture-draft.md)
 
 ## Summary

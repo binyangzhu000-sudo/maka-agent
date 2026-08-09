@@ -966,7 +966,6 @@ Process crash、SQLite transaction atomicity 和应用级 `fsync` 不能自动�
 - [RecoveryResolver ADR](./runtime-recovery-resolver-adr.zh-CN.md)
 - [Runtime Resume Phase 3–4 实施路线](./runtime-resume-phase3-phase4-workspace-checkpoint-design.zh-CN.md)
 - [Runtime Resume 拆分与提取账本](./runtime-resume-extraction-ledger.zh-CN.md)
-- [Runtime Resume 与 Tool Journal 设计草案](../runtime-resume-tool-journal-design-draft.zh-CN.md)
 - [第一章：Log Is the Runtime](./runtime-core-architecture-draft.zh-CN.md)
 
 ## 小结

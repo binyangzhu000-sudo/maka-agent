@@ -411,8 +411,7 @@ function isLowSignalInternalPath(path: string): boolean {
   return (
     /\/runs\/sessions\//.test(path) ||
     /\/runtime-events\.jsonl$/.test(path) ||
-    /\/events\.jsonl$/.test(path) ||
-    /\/result\.json$/.test(path)
+    /\/events\.jsonl$/.test(path)
   );
 }
 

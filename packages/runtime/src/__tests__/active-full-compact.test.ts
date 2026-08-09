@@ -457,6 +457,39 @@ describe('active full compact PR1 foundation', () => {
     assert.equal(summary.text.includes('RAW_SELECTED_PAYLOAD'), false);
   });
 
+  test('deterministic summary preserves an ordinary result.json artifact', () => {
+    const messages = textMessages([
+      'Created /workspace/result.json with the final user-requested report.',
+      'recent anchor',
+    ]);
+    const index = buildActiveFullCompactSourceIndex({
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      messages,
+      stepNumber: 2,
+      charsPerToken: 1,
+    });
+    const selection = selectActiveFullCompactCoveredSpan(index, {
+      enabled: true,
+      minStepNumber: 1,
+      minRecentMessages: 1,
+      maxActiveEstimatedTokens: 1,
+      highWaterRatio: 0.1,
+      maxSummaryEstimatedTokens: 512,
+    });
+    assert.equal(selection.decision, 'selected');
+    if (selection.decision !== 'selected') assert.fail('expected selected');
+
+    const summary = buildDeterministicActiveFullCompactSummary({
+      selection,
+      messages,
+      maxSummaryEstimatedTokens: 512,
+      charsPerToken: 1,
+    });
+
+    assert.deepEqual(summary.artifactPaths, ['/workspace/result.json']);
+  });
+
   test('rewrite helper replaces a safe completed span with one compact block', () => {
     const messages = textMessages([
       'old raw payload alpha '.repeat(30),
