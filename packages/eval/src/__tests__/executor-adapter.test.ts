@@ -68,6 +68,69 @@ for (const [kind, create] of [
   });
 }
 
+test('subject failure cannot be promoted to completed by a verifier', async () => {
+  const executor = createHarborExecutorAdapter({
+    async prepare() {
+      return { cwd: '/task', metadata: {} };
+    },
+    async verify() {
+      return { status: 'completed', score: 0.25, artifacts: [] };
+    },
+  });
+
+  const result = await executor.execute({
+    cell: cell('harbor'),
+    async runSubject() {
+      return {
+        usage: usage(),
+        costUsd: 0.02,
+        durationMs: 12,
+        status: 'failed',
+        failureReason: 'exit 1',
+        artifacts: [{ kind: 'subject' }],
+      };
+    },
+  });
+
+  assert.equal(result.status, 'subject_failed');
+  assert.equal(result.failureReason, 'exit 1');
+  assert.equal(result.score, 0.25);
+});
+
+test('verifier infrastructure failure preserves attributable subject data', async () => {
+  const executor = createHarborExecutorAdapter({
+    async prepare() {
+      return { cwd: '/task', metadata: {} };
+    },
+    async verify() {
+      throw new Error('verifier unavailable');
+    },
+  });
+
+  const result = await executor.execute({
+    cell: cell('harbor'),
+    async runSubject() {
+      return {
+        usage: usage(),
+        costUsd: 0.02,
+        durationMs: 12,
+        status: 'completed',
+        artifacts: [{ kind: 'subject' }],
+      };
+    },
+  });
+
+  assert.deepEqual(result, {
+    score: null,
+    usage: usage(),
+    costUsd: 0.02,
+    durationMs: 12,
+    status: 'infra_failed',
+    failureReason: 'executor verification failed: verifier unavailable',
+    artifacts: [{ kind: 'subject' }],
+  });
+});
+
 function cell(kind: string): ExperimentCell {
   return {
     id: 'task::1::subject',
@@ -79,5 +142,16 @@ function cell(kind: string): ExperimentCell {
     task: { id: 'task', input: 'Solve it', config: {} },
     repetition: 1,
     subject: { id: 'subject', kind: 'external', config: {} },
+  };
+}
+
+function usage() {
+  return {
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 2,
+    cacheWriteTokens: 1,
+    reasoningTokens: 3,
+    totalTokens: 18,
   };
 }

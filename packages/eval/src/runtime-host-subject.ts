@@ -39,6 +39,9 @@ export function createMakaSubjectAdapter(input: CreateMakaSubjectAdapterInput): 
   const pollIntervalMs = input.pollIntervalMs ?? 25;
   return {
     kind: 'maka',
+    validate(cell) {
+      decodeMakaSubjectConfig(cell.subject.config);
+    },
     async execute({ cell, context }): Promise<SubjectExecutionResult> {
       const config = decodeMakaSubjectConfig(cell.subject.config);
       const sessionId = newId();

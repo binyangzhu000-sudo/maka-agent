@@ -57,41 +57,56 @@ function createExecutorAdapter(
         return failedResult('infra_failed', `executor prepare failed: ${errorMessage(error)}`);
       }
 
-      let result: EvalResult;
+      let subject: SubjectExecutionResult;
       try {
-        const subject = await runSubject(context);
-        if (subject.status === 'infra_failed' || subject.status === 'indeterminate') {
-          result = {
-            score: null,
-            usage: subject.usage,
-            costUsd: subject.costUsd,
-            durationMs: subject.durationMs,
-            status: subject.status,
-            failureReason: subject.failureReason ?? `subject ${subject.status}`,
-            artifacts: subject.artifacts,
-          };
-        } else {
+        subject = await runSubject(context);
+      } catch (error) {
+        subject = {
+          ...failedResult('infra_failed', `subject execution failed: ${errorMessage(error)}`),
+          status: 'infra_failed',
+        };
+      }
+
+      let result: EvalResult;
+      if (subject.status === 'infra_failed' || subject.status === 'indeterminate') {
+        result = {
+          score: null,
+          usage: subject.usage,
+          costUsd: subject.costUsd,
+          durationMs: subject.durationMs,
+          status: subject.status,
+          failureReason: subject.failureReason ?? `subject ${subject.status}`,
+          artifacts: subject.artifacts,
+        };
+      } else {
+        try {
           const verified = await driver.verify({ cell, context, subject });
+          const status = subject.status === 'failed' ? 'subject_failed' : verified.status;
           result = {
             score: verified.score,
             usage: subject.usage,
             costUsd: subject.costUsd,
             durationMs: subject.durationMs,
-            status: verified.status,
-            ...(verified.status === 'completed'
+            status,
+            ...(status === 'completed'
               ? {}
               : {
                   failureReason:
-                    verified.failureReason ?? subject.failureReason ?? `cell ${verified.status}`,
+                    subject.failureReason ?? verified.failureReason ?? `cell ${status}`,
                 }),
             artifacts: [...subject.artifacts, ...verified.artifacts],
           };
+        } catch (error) {
+          result = {
+            score: null,
+            usage: subject.usage,
+            costUsd: subject.costUsd,
+            durationMs: subject.durationMs,
+            status: 'infra_failed',
+            failureReason: `executor verification failed: ${errorMessage(error)}`,
+            artifacts: subject.artifacts,
+          };
         }
-      } catch (error) {
-        result = failedResult(
-          'infra_failed',
-          `executor verification failed: ${errorMessage(error)}`,
-        );
       }
 
       if (driver.cleanup) {

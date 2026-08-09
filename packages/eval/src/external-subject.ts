@@ -20,6 +20,9 @@ export function createExternalSubjectAdapter(options?: {
   const now = options?.now ?? Date.now;
   return {
     kind: 'external',
+    validate(cell) {
+      decodeExternalSubjectConfig(cell.subject.config);
+    },
     async execute({ cell, context }): Promise<SubjectExecutionResult> {
       const config = decodeExternalSubjectConfig(cell.subject.config);
       const args = config.args.map((argument) =>

@@ -29,6 +29,7 @@ export interface SubjectExecutionContext {
 
 export interface SubjectAdapter {
   readonly kind: string;
+  validate?(cell: ExperimentCell): void;
   execute(input: {
     readonly cell: ExperimentCell;
     readonly context: SubjectExecutionContext;
@@ -110,10 +111,16 @@ async function runExperimentExclusive(input: RunExperimentInput): Promise<Experi
 
   for (const cell of cells) {
     if (!selected.has(cell.id)) continue;
-    const attempts = await input.store.list(cell.id);
-    if (selectCellResult(attempts)) continue;
     const subject = subjects.get(cell.subject.kind);
     if (!subject) throw new Error(`no subject adapter registered for ${cell.subject.kind}`);
+    subject.validate?.(cell);
+  }
+
+  for (const cell of cells) {
+    if (!selected.has(cell.id)) continue;
+    const attempts = await input.store.list(cell.id);
+    if (selectCellResult(attempts)) continue;
+    const subject = subjects.get(cell.subject.kind)!;
     const sequence = (attempts.at(-1)?.sequence ?? 0) + 1;
     const startedAt = now();
     const result = await executor.execute({

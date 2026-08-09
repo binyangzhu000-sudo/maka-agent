@@ -192,6 +192,38 @@ describe('cell attempts', () => {
     assert.equal(run.results.get('valid::1::maka')?.sequence, 1);
     assert.equal(run.results.get('replace::1::maka')?.sequence, 2);
   });
+
+  test('rejects invalid subject configuration before executing a cell', async () => {
+    let executions = 0;
+    await assert.rejects(
+      runExperiment({
+        spec: oneCellSpec(),
+        store: new InMemoryAttemptStore(),
+        executors: [
+          {
+            kind: 'harbor',
+            async execute() {
+              executions += 1;
+              return completedResult();
+            },
+          },
+        ],
+        subjects: [
+          {
+            kind: 'external',
+            validate() {
+              throw new Error('invalid external config');
+            },
+            async execute() {
+              throw new Error('unreachable');
+            },
+          },
+        ],
+      }),
+      /invalid external config/,
+    );
+    assert.equal(executions, 0);
+  });
 });
 
 function attempt(sequence: number, status: CellAttempt['result']['status']): CellAttempt {
@@ -217,4 +249,22 @@ function attempt(sequence: number, status: CellAttempt['result']['status']): Cel
       artifacts: [],
     },
   };
+}
+
+function oneCellSpec(): ExperimentSpec {
+  return {
+    schemaVersion: 'maka.eval.v1',
+    id: 'validation',
+    benchmark: { id: 'bench', version: '1', config: {} },
+    executor: { kind: 'harbor', config: {} },
+    subjects: [{ id: 'external', kind: 'external', config: {} }],
+    tasks: [{ id: 'task', input: 'task', config: {} }],
+    repetitions: 1,
+    budget: {},
+    verifier: {},
+  };
+}
+
+function completedResult(): EvalResult {
+  return attempt(1, 'completed').result;
 }
