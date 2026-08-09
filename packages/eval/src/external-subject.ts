@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
 import type { JsonObject } from './experiment.js';
+import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionResult } from './runner.js';
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
-const EMPTY_USAGE = Object.freeze({
+const EMPTY_USAGE: NormalizedUsage = Object.freeze({
   inputTokens: 0,
   outputTokens: 0,
   cacheReadTokens: 0,
@@ -48,25 +49,29 @@ export function createExternalSubjectAdapter(options?: {
           signal: context.signal,
         });
         const durationMs = now() - startedAt;
+        if (processResult.exitCode !== 0) {
+          return {
+            usage: EMPTY_USAGE,
+            costUsd: null,
+            durationMs,
+            status: 'failed',
+            failureReason: `external subject exited with code ${processResult.exitCode}`,
+            artifacts: [{ kind: 'external_process', exitCode: processResult.exitCode }],
+          };
+        }
+        const external = decodeExternalSubjectResult(processResult.stdout);
         return {
-          output: processResult.stdout,
-          usage: EMPTY_USAGE,
-          costUsd: null,
+          ...(external.output === undefined ? {} : { output: external.output }),
+          usage: external.usage,
+          costUsd: external.costUsd,
           durationMs,
-          status: processResult.exitCode === 0 ? 'completed' : 'failed',
-          ...(processResult.exitCode === 0
-            ? {}
-            : {
-                failureReason:
-                  processResult.stderr.trim() ||
-                  `external subject exited with code ${processResult.exitCode}`,
-              }),
+          status: 'completed',
           artifacts: [
             {
               kind: 'external_process',
-              command: config.command,
               exitCode: processResult.exitCode,
             },
+            ...external.artifacts,
           ],
         };
       } catch (error) {
@@ -87,6 +92,61 @@ interface ExternalSubjectConfig {
   readonly command: string;
   readonly args: readonly string[];
   readonly environment: readonly string[];
+}
+
+interface ExternalSubjectProtocolResult {
+  readonly output?: string;
+  readonly usage: NormalizedUsage;
+  readonly costUsd: number | null;
+  readonly artifacts: readonly JsonObject[];
+}
+
+function decodeExternalSubjectResult(stdout: string): ExternalSubjectProtocolResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout) as unknown;
+  } catch {
+    throw new Error('external subject returned invalid JSON');
+  }
+  const record = exactRecord(
+    value,
+    'external subject result',
+    ['schemaVersion', 'usage', 'costUsd', 'artifacts'],
+    ['output'],
+  );
+  if (record.schemaVersion !== 'maka.external_subject_result.v1') {
+    throw new Error('external subject result.schemaVersion is invalid');
+  }
+  if (record.output !== undefined && typeof record.output !== 'string') {
+    throw new Error('external subject result.output must be a string');
+  }
+  const usage = exactRecord(record.usage, 'external subject result.usage', [
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'reasoningTokens',
+    'totalTokens',
+  ]);
+  const decodedUsage = {
+    inputTokens: nonnegativeNumber(usage.inputTokens, 'usage.inputTokens'),
+    outputTokens: nonnegativeNumber(usage.outputTokens, 'usage.outputTokens'),
+    cacheReadTokens: nonnegativeNumber(usage.cacheReadTokens, 'usage.cacheReadTokens'),
+    cacheWriteTokens: nonnegativeNumber(usage.cacheWriteTokens, 'usage.cacheWriteTokens'),
+    reasoningTokens: nonnegativeNumber(usage.reasoningTokens, 'usage.reasoningTokens'),
+    totalTokens: nonnegativeNumber(usage.totalTokens, 'usage.totalTokens'),
+  };
+  const costUsd =
+    record.costUsd === null ? null : nonnegativeNumber(record.costUsd, 'result.costUsd');
+  if (!Array.isArray(record.artifacts) || !record.artifacts.every(isJsonObject)) {
+    throw new Error('external subject result.artifacts must contain JSON objects');
+  }
+  return {
+    ...(record.output === undefined ? {} : { output: record.output }),
+    usage: decodedUsage,
+    costUsd,
+    artifacts: record.artifacts,
+  };
 }
 
 function decodeExternalSubjectConfig(config: JsonObject): ExternalSubjectConfig {
@@ -139,7 +199,7 @@ function runProcess(input: {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       env: input.env,
-      signal: input.signal,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const stdout: Buffer[] = [];
@@ -149,7 +209,7 @@ function runProcess(input: {
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
-      child.kill('SIGKILL');
+      killProcessTree(child.pid);
       reject(error);
     };
     const capture = (target: Buffer[]) => (chunk: Buffer) => {
@@ -162,8 +222,11 @@ function runProcess(input: {
     };
     child.stdout.on('data', capture(stdout));
     child.stderr.on('data', capture(stderr));
+    const abort = () => fail(new Error('external subject was cancelled'));
+    input.signal?.addEventListener('abort', abort, { once: true });
     child.once('error', fail);
     child.once('close', (code, signal) => {
+      input.signal?.removeEventListener('abort', abort);
       if (settled) return;
       settled = true;
       if (code === null) {
@@ -177,6 +240,46 @@ function runProcess(input: {
       });
     });
   });
+}
+
+function killProcessTree(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL');
+  } catch {
+    // The process may have exited between the failing read and the signal.
+  }
+}
+
+function exactRecord(
+  value: unknown,
+  where: string,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${where} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const allowed = new Set([...required, ...optional]);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) throw new Error(`${where}.${key} is not supported`);
+  }
+  for (const key of required) {
+    if (!Object.hasOwn(record, key)) throw new Error(`${where}.${key} is required`);
+  }
+  return record;
+}
+
+function nonnegativeNumber(value: unknown, where: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${where} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 function errorMessage(error: unknown): string {
