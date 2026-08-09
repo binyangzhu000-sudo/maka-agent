@@ -193,6 +193,10 @@ test('maka eval settles an interrupted cell before returning the signal exit cod
     }),
   );
   let settled = false;
+  let announceStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
   const run = runMakaEvalCli(['run', specPath, '--out', join(root, 'out')], {
     writeOut: () => {},
     writeError: () => {},
@@ -200,6 +204,7 @@ test('maka eval settles an interrupted cell before returning the signal exit cod
     createExternalSubject: () => ({
       kind: 'external',
       async execute({ context }) {
+        announceStarted();
         await new Promise<void>((resolve) => {
           if (context.signal?.aborted) resolve();
           else context.signal?.addEventListener('abort', () => resolve(), { once: true });
@@ -209,6 +214,7 @@ test('maka eval settles an interrupted cell before returning the signal exit cod
       },
     }),
   });
+  await started;
   process.emit('SIGINT', 'SIGINT');
 
   assert.equal(await run, 130);

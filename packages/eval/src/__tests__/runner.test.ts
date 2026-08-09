@@ -61,6 +61,61 @@ test('verifier infrastructure failure preserves attributable subject data', asyn
   });
 });
 
+test('an indeterminate subject still reaches executor settlement and verification', async () => {
+  let verified = false;
+  const result = await runOne(
+    {
+      ...executor(),
+      async verify() {
+        verified = true;
+        return { status: 'subject_failed', score: 0, artifacts: [{ kind: 'verifier' }] };
+      },
+    },
+    async () => ({ ...completedSubject(), status: 'indeterminate' }),
+  );
+
+  assert.equal(verified, true);
+  assert.equal(result.status, 'subject_failed');
+  assert.equal(result.score, 0);
+});
+
+test('cancellation stops the cohort before another cell starts', async () => {
+  const controller = new AbortController();
+  const prepared: string[] = [];
+  const twoTasks = {
+    ...spec(),
+    tasks: [
+      { id: 'first', input: 'First', config: {} },
+      { id: 'second', input: 'Second', config: {} },
+    ],
+  } satisfies ExperimentSpec;
+  await runExperiment({
+    spec: twoTasks,
+    store: new MemoryAttemptStore(),
+    signal: controller.signal,
+    executors: [
+      {
+        ...executor(),
+        async prepare({ cell }) {
+          prepared.push(cell.task.id);
+          return { cwd: '/task', metadata: {} };
+        },
+      },
+    ],
+    subjects: [
+      {
+        kind: 'external',
+        async execute() {
+          controller.abort();
+          return { ...completedSubject(), status: 'indeterminate' };
+        },
+      },
+    ],
+  });
+
+  assert.deepEqual(prepared, ['first']);
+});
+
 async function runOne(
   executor: ExperimentExecutor,
   execute: (context: SubjectExecutionContext) => Promise<SubjectExecutionResult>,

@@ -64,6 +64,7 @@ export interface ExperimentExecutor {
     readonly cell: ExperimentCell;
     readonly environment: SubjectExecutionEnvironment;
     readonly subject: SubjectExecutionResult;
+    readonly signal?: AbortSignal;
   }): Promise<{
     readonly status: EvalResult['status'];
     readonly score: number | null;
@@ -121,6 +122,7 @@ async function runExperimentExclusive(input: RunExperimentInput): Promise<Experi
 
   for (const cell of cells) {
     if (!selected.has(cell.id)) continue;
+    if (input.signal?.aborted) break;
     const attempts = await input.store.list(cell.id);
     if (selectCellResult(attempts)) continue;
     const subject = subjects.get(cell.subject.kind)!;
@@ -180,37 +182,38 @@ async function executeCell(
   }
 
   let result: EvalResult;
-  if (subject.status === 'infra_failed' || subject.status === 'indeterminate') {
+  try {
+    const verified = await executor.verify({
+      cell,
+      environment,
+      subject,
+      ...(signal ? { signal } : {}),
+    });
+    const cancelledByCaller = signal?.aborted === true;
+    const subjectInfrastructureFailed = subject.status === 'infra_failed';
+    result = {
+      score: cancelledByCaller || subjectInfrastructureFailed ? null : verified.score,
+      usage: subject.usage,
+      costUsd: subject.costUsd,
+      durationMs: subject.durationMs,
+      status: cancelledByCaller
+        ? 'indeterminate'
+        : subjectInfrastructureFailed
+          ? 'infra_failed'
+          : subject.status === 'failed'
+            ? 'subject_failed'
+            : verified.status,
+      artifacts: [...subject.artifacts, ...verified.artifacts],
+    };
+  } catch {
     result = {
       score: null,
       usage: subject.usage,
       costUsd: subject.costUsd,
       durationMs: subject.durationMs,
-      status: subject.status,
-      artifacts: subject.artifacts,
+      status: 'infra_failed',
+      artifacts: [...subject.artifacts, executorFailureArtifact('verify')],
     };
-  } else {
-    try {
-      const verified = await executor.verify({ cell, environment, subject });
-      const status = subject.status === 'failed' ? 'subject_failed' : verified.status;
-      result = {
-        score: verified.score,
-        usage: subject.usage,
-        costUsd: subject.costUsd,
-        durationMs: subject.durationMs,
-        status,
-        artifacts: [...subject.artifacts, ...verified.artifacts],
-      };
-    } catch {
-      result = {
-        score: null,
-        usage: subject.usage,
-        costUsd: subject.costUsd,
-        durationMs: subject.durationMs,
-        status: 'infra_failed',
-        artifacts: [...subject.artifacts, executorFailureArtifact('verify')],
-      };
-    }
   }
 
   if (executor.cleanup) {
