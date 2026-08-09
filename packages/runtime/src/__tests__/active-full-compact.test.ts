@@ -457,9 +457,10 @@ describe('active full compact PR1 foundation', () => {
     assert.equal(summary.text.includes('RAW_SELECTED_PAYLOAD'), false);
   });
 
-  test('deterministic summary preserves an ordinary result.json artifact', () => {
+  test('deterministic summary preserves paths that only resemble deleted Eval layouts', () => {
     const messages = textMessages([
       'Created /workspace/result.json with the final user-requested report.',
+      'Created /workspace/runs/sessions/report.json for the user.',
       'recent anchor',
     ]);
     const index = buildActiveFullCompactSourceIndex({
@@ -487,7 +488,10 @@ describe('active full compact PR1 foundation', () => {
       charsPerToken: 1,
     });
 
-    assert.deepEqual(summary.artifactPaths, ['/workspace/result.json']);
+    assert.deepEqual(summary.artifactPaths, [
+      '/workspace/result.json',
+      '/workspace/runs/sessions/report.json',
+    ]);
   });
 
   test('rewrite helper replaces a safe completed span with one compact block', () => {

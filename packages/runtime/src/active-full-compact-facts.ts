@@ -408,11 +408,7 @@ function isLowSignalRawLogLine(line: string): boolean {
 }
 
 function isLowSignalInternalPath(path: string): boolean {
-  return (
-    /\/runs\/sessions\//.test(path) ||
-    /\/runtime-events\.jsonl$/.test(path) ||
-    /\/events\.jsonl$/.test(path)
-  );
+  return /\/runtime-events\.jsonl$/.test(path) || /\/events\.jsonl$/.test(path);
 }
 
 function sortedSelectedEntries(selection: SelectedFactSource): FactSourceEntry[] {
