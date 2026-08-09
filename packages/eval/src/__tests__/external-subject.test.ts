@@ -58,6 +58,26 @@ test('external subject never persists stderr from a failed credential-bearing pr
   assert.doesNotMatch(JSON.stringify(result), /do-not-store/);
 });
 
+test('external subject does not start when its execution is already cancelled', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'maka-eval-external-cancelled-'));
+  const controller = new AbortController();
+  controller.abort();
+  const adapter = createExternalSubjectAdapter();
+
+  const result = await adapter.execute({
+    cell: externalCell(),
+    context: {
+      cwd,
+      metadata: {},
+      signal: controller.signal,
+      executeExternal: createLocalExternalExecution(),
+    },
+  });
+
+  assert.equal(result.status, 'indeterminate');
+  assert.deepEqual(result.artifacts, [{ kind: 'external_process_failure', reason: 'cancelled' }]);
+});
+
 test('external subject output limit terminates the whole process group', {
   skip: process.platform === 'win32',
 }, async () => {

@@ -13,6 +13,7 @@ const USAGE = 'usage: maka eval run <spec.json> --out <dir> [--cell <cell-id>]';
 export interface RunMakaEvalCliDeps {
   readonly loadExecutor: (spec: ExperimentSpec, specPath: string) => Promise<ExperimentExecutor>;
   readonly createExternalSubject: () => SubjectAdapter;
+  readonly signal?: AbortSignal;
   readonly writeOut: (text: string) => void;
   readonly writeError: (text: string) => void;
 }
@@ -28,6 +29,21 @@ export async function runMakaEvalCli(
     writeError: (text) => process.stderr.write(text),
     ...overrides,
   };
+  const controller = deps.signal ? undefined : new AbortController();
+  const signal = deps.signal ?? controller!.signal;
+  let signalExitCode: number | undefined;
+  const onInterrupt = () => {
+    signalExitCode = 130;
+    controller?.abort();
+  };
+  const onTerminate = () => {
+    signalExitCode = 143;
+    controller?.abort();
+  };
+  if (controller) {
+    process.once('SIGINT', onInterrupt);
+    process.once('SIGTERM', onTerminate);
+  }
   try {
     const command = parseArgs(argv);
     if (command.kind === 'help') {
@@ -46,6 +62,7 @@ export async function runMakaEvalCli(
         executors: [executor],
         subjects,
         ...(command.cellIds.length > 0 ? { cellIds: command.cellIds } : {}),
+        signal,
       });
       const cells = await Promise.all(
         expandExperiment(spec).map(async (cell) => {
@@ -70,11 +87,16 @@ export async function runMakaEvalCli(
       deps.writeOut(
         `${JSON.stringify({ experimentId: spec.id, cells: cells.length, incomplete })}\n`,
       );
-      return incomplete === 0 ? 0 : 1;
+      return signalExitCode ?? (incomplete === 0 ? 0 : 1);
     }
   } catch (error) {
     deps.writeError(`maka eval: ${errorMessage(error)}\n${USAGE}\n`);
-    return 2;
+    return signalExitCode ?? 2;
+  } finally {
+    if (controller) {
+      process.removeListener('SIGINT', onInterrupt);
+      process.removeListener('SIGTERM', onTerminate);
+    }
   }
 }
 

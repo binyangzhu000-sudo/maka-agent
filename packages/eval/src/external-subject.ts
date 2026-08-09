@@ -74,7 +74,7 @@ export function createExternalSubjectAdapter(options?: {
           usage: EMPTY_USAGE,
           costUsd: null,
           durationMs: now() - startedAt,
-          status: context.signal?.aborted ? 'failed' : 'infra_failed',
+          status: context.signal?.aborted ? 'indeterminate' : 'infra_failed',
           artifacts: [
             {
               kind: 'external_process_failure',
@@ -211,6 +211,7 @@ function runProcess(input: {
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }): Promise<{ exitCode: number; stdout: string }> {
+  if (input.signal?.aborted) return Promise.reject(new Error('external subject was cancelled'));
   return new Promise((resolve, reject) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
@@ -240,6 +241,7 @@ function runProcess(input: {
     child.stderr.on('data', capture(stderr));
     const abort = () => fail(new Error('external subject was cancelled'));
     input.signal?.addEventListener('abort', abort, { once: true });
+    if (input.signal?.aborted) abort();
     child.once('error', fail);
     child.once('close', (code, signal) => {
       input.signal?.removeEventListener('abort', abort);

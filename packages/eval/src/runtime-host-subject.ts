@@ -61,17 +61,25 @@ export function createMakaSubjectAdapter(
             pollIntervalMs,
           },
         );
+        const incomplete = !result.usageComplete;
         return {
           usage: result.usage,
           costUsd: result.costUsd,
           durationMs: now() - startedAt,
-          status: result.status === 'completed' ? 'completed' : 'failed',
+          status: incomplete
+            ? 'indeterminate'
+            : result.status === 'completed'
+              ? 'completed'
+              : result.status === 'cancelled'
+                ? 'indeterminate'
+                : 'failed',
           artifacts: [
             runtimeHostRunArtifact(
               result.executionId,
               result.rootTurnId,
               result.rootRunId,
               result.failureReason,
+              result.usageComplete,
             ),
           ],
         };
@@ -161,8 +169,16 @@ function runtimeHostRunArtifact(
   turnId: string,
   runId: string,
   reason?: string,
+  usageComplete = true,
 ): JsonObject {
-  return { kind: 'runtime_host_run', sessionId, turnId, runId, ...(reason ? { reason } : {}) };
+  return {
+    kind: 'runtime_host_run',
+    sessionId,
+    turnId,
+    runId,
+    usageComplete,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 function classifyRuntimeHostFailure(error: unknown): string {

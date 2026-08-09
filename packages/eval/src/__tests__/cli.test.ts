@@ -3,11 +3,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import {
-  createExperimentExecutorAdapter,
-  runMakaEvalCli,
-  type SubjectExecutionResult,
-} from '../index.js';
+import { runMakaEvalCli, type ExperimentExecutor, type SubjectExecutionResult } from '../index.js';
 
 const USAGE = {
   inputTokens: 1,
@@ -60,8 +56,9 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
   const verified: string[] = [];
   const external: string[] = [];
   const sessions: Array<{ name?: string; orchestrationMode?: string }> = [];
-  const executor = createExperimentExecutorAdapter('harbor', {
-    async prepare(cell) {
+  const executor = {
+    kind: 'harbor',
+    async prepare({ cell }) {
       prepared.push(cell.subject.id);
       return {
         cwd: root,
@@ -75,6 +72,7 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
             rootRunId: 'run',
             usage: USAGE,
             costUsd: 0.01,
+            usageComplete: true,
           };
         },
       };
@@ -87,7 +85,7 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
         artifacts: [],
       };
     },
-  });
+  } satisfies ExperimentExecutor;
   const code = await runMakaEvalCli(['run', specPath, '--out', out], {
     writeOut: () => {},
     loadExecutor: async () => executor,
@@ -130,7 +128,7 @@ test('maka eval public path loads a declared executor and runs a real external s
   const evalModuleUrl = new URL('../index.js', import.meta.url).href;
   await writeFile(
     modulePath,
-    `import {createLocalExternalExecution} from ${JSON.stringify(evalModuleUrl)};const executeExternal=createLocalExternalExecution();export function createExecutor(){return{kind:"harbor",async execute({runSubject}){const subject=await runSubject({cwd:process.cwd(),metadata:{},executeExternal});return{score:subject.status==="completed"?1:null,usage:subject.usage,costUsd:subject.costUsd,durationMs:subject.durationMs,status:subject.status==="completed"?"completed":"subject_failed",artifacts:subject.artifacts}}}}`,
+    `import {createLocalExternalExecution} from ${JSON.stringify(evalModuleUrl)};const executeExternal=createLocalExternalExecution();export function createExecutor(){return{kind:"harbor",async prepare(){return{cwd:process.cwd(),metadata:{},executeExternal}},async verify({subject}){return{score:subject.status==="completed"?1:null,status:subject.status==="completed"?"completed":"subject_failed",artifacts:[]}}}}`,
   );
   await writeFile(
     specPath,
@@ -174,6 +172,49 @@ test('maka eval public path loads a declared executor and runs a real external s
   assert.equal(results.cells[0].attempt.result.usage.totalTokens, 2);
 });
 
+test('maka eval settles an interrupted cell before returning the signal exit code', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-signal-'));
+  const specPath = join(root, 'experiment.json');
+  await writeFile(
+    specPath,
+    JSON.stringify({
+      schemaVersion: 'maka.eval.v1',
+      id: 'signal',
+      benchmark: { id: 'bench', version: '1', config: {} },
+      executor: {
+        kind: 'harbor',
+        config: { module: './executor.mjs', export: 'createExecutor', options: {} },
+      },
+      subjects: [{ id: 'external', kind: 'external', config: {} }],
+      tasks: [{ id: 'task', input: 'Solve it', config: {} }],
+      repetitions: 1,
+      budget: {},
+      verifier: {},
+    }),
+  );
+  let settled = false;
+  const run = runMakaEvalCli(['run', specPath, '--out', join(root, 'out')], {
+    writeOut: () => {},
+    writeError: () => {},
+    loadExecutor: async () => executor(),
+    createExternalSubject: () => ({
+      kind: 'external',
+      async execute({ context }) {
+        await new Promise<void>((resolve) => {
+          if (context.signal?.aborted) resolve();
+          else context.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        settled = true;
+        return { ...completedSubject(), status: 'indeterminate' };
+      },
+    }),
+  });
+  process.emit('SIGINT', 'SIGINT');
+
+  assert.equal(await run, 130);
+  assert.equal(settled, true);
+});
+
 function makaConfig(orchestrationMode: 'default' | 'graph') {
   return {
     connectionSlug: 'deepseek',
@@ -193,5 +234,17 @@ function completedSubject(): SubjectExecutionResult {
     durationMs: 1,
     status: 'completed',
     artifacts: [],
+  };
+}
+
+function executor(): ExperimentExecutor {
+  return {
+    kind: 'harbor',
+    async prepare() {
+      return { cwd: '/task', metadata: {} };
+    },
+    async verify() {
+      return { status: 'completed', score: 1, artifacts: [] };
+    },
   };
 }
