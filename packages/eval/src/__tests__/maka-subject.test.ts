@@ -87,6 +87,73 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
   });
 });
 
+test('Maka subject preserves attributable usage when Session cleanup is indeterminate', async () => {
+  const client: MakaRuntimeHostClient = {
+    async createSession() {},
+    async startTurn() {
+      return { kind: 'started', runId: 'run-1' };
+    },
+    async queryTurn() {
+      return { status: 'completed', runId: 'run-1' };
+    },
+    async readUsage() {
+      return {
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 2,
+          cacheWriteTokens: 1,
+          reasoningTokens: 3,
+          totalTokens: 18,
+        },
+        costUsd: 0.02,
+      };
+    },
+    async removeSession() {
+      throw new Error('cleanup unavailable');
+    },
+    async stopTurn() {},
+  };
+  const ids = ['session-1', 'turn-1'];
+  const adapter = createMakaSubjectAdapter({
+    client,
+    newId: () => ids.shift()!,
+    now: (() => {
+      let now = 100;
+      return () => now++;
+    })(),
+    pollIntervalMs: 0,
+  });
+
+  const result = await adapter.execute({
+    cell: makaCell(),
+    context: { cwd: '/workspace', metadata: {} },
+  });
+
+  assert.deepEqual(result, {
+    usage: {
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      reasoningTokens: 3,
+      totalTokens: 18,
+    },
+    costUsd: 0.02,
+    durationMs: 1,
+    status: 'indeterminate',
+    failureReason: 'Runtime Host Session cleanup failed: cleanup unavailable',
+    artifacts: [
+      {
+        kind: 'runtime_host_run',
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        runId: 'run-1',
+      },
+    ],
+  });
+});
+
 function makaCell(): ExperimentCell {
   return {
     id: 'task::1::maka',

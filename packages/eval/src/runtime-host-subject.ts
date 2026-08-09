@@ -134,12 +134,11 @@ export function createMakaSubjectAdapter(input: CreateMakaSubjectAdapterInput): 
         try {
           await input.client.removeSession(sessionId);
         } catch (error) {
-          return failureResult(
-            'indeterminate',
-            `Runtime Host Session cleanup failed: ${errorMessage(error)}`,
-            result.durationMs,
-            result.artifacts,
-          );
+          return {
+            ...result,
+            status: 'indeterminate',
+            failureReason: `Runtime Host Session cleanup failed: ${errorMessage(error)}`,
+          };
         }
       }
       return result;
