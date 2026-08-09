@@ -32,17 +32,20 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
         {
           id: 'maka-default',
           kind: 'maka',
+          credentials: [],
           config: makaConfig('default'),
         },
         {
           id: 'maka-graph',
           kind: 'maka',
+          credentials: [],
           config: makaConfig('graph'),
         },
         {
           id: 'competitor',
           kind: 'external',
-          config: { command: 'competitor', args: [], environment: [] },
+          credentials: [],
+          config: { command: 'competitor', args: [] },
         },
       ],
       tasks: [{ id: 'task', input: 'Solve it', config: {} }],
@@ -141,10 +144,10 @@ test('maka eval public path loads a declared executor capability', async () => {
         {
           id: 'external',
           kind: 'external',
+          credentials: [],
           config: {
             command: 'competitor',
             args: [],
-            environment: [],
           },
         },
       ],
@@ -179,7 +182,7 @@ test('maka eval settles an interrupted cell before returning the signal exit cod
         kind: 'harbor',
         config: { module: './executor.mjs', export: 'createExecutor', options: {} },
       },
-      subjects: [{ id: 'external', kind: 'external', config: {} }],
+      subjects: [{ id: 'external', kind: 'external', credentials: [], config: {} }],
       tasks: [{ id: 'task', input: 'Solve it', config: {} }],
       repetitions: 1,
       budget: {},

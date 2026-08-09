@@ -193,6 +193,7 @@ function makaCell(): ExperimentCell {
     subject: {
       id: 'maka',
       kind: 'maka',
+      credentials: [],
       config: {
         connectionSlug: 'connection',
         model: 'model',

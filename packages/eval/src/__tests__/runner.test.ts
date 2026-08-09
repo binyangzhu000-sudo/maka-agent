@@ -213,7 +213,7 @@ function spec(): ExperimentSpec {
     id: 'experiment',
     benchmark: { id: 'bench', version: '1', config: {} },
     executor: { kind: 'harbor', config: {} },
-    subjects: [{ id: 'subject', kind: 'external', config: {} }],
+    subjects: [{ id: 'subject', kind: 'external', credentials: [], config: {} }],
     tasks: [{ id: 'task', input: 'Solve it', config: {} }],
     repetitions: 1,
     budget: {},

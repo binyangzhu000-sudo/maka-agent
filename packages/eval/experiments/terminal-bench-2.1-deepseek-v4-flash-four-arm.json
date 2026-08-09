@@ -15,12 +15,6 @@
       "export": "createHarborExecutor",
       "options": {
         "containerCwd": "/app",
-        "credentialEnvironment": [
-          "ANTHROPIC_API_KEY",
-          "ANTHROPIC_BASE_URL",
-          "OPENAI_API_KEY",
-          "OPENAI_BASE_URL"
-        ],
         "environment": {
           "type": "docker",
           "delete": true,
@@ -35,6 +29,7 @@
     {
       "id": "maka",
       "kind": "maka",
+      "credentials": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
       "config": {
         "connectionSlug": "deepseek",
         "model": "deepseek-v4-flash",
@@ -48,6 +43,7 @@
     {
       "id": "codex",
       "kind": "external",
+      "credentials": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
       "config": {
         "command": "node",
         "args": [
@@ -59,13 +55,13 @@
           "--model",
           "deepseek-v4-flash",
           "{{task.input}}"
-        ],
-        "environment": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
+        ]
       }
     },
     {
       "id": "claude-code",
       "kind": "external",
+      "credentials": ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"],
       "config": {
         "command": "node",
         "args": [
@@ -78,13 +74,13 @@
           "--model",
           "deepseek-v4-flash",
           "{{task.input}}"
-        ],
-        "environment": ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"]
+        ]
       }
     },
     {
       "id": "reasonix",
       "kind": "external",
+      "credentials": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
       "config": {
         "command": "node",
         "args": [
@@ -99,8 +95,7 @@
           "--output-format",
           "stream-json",
           "{{task.input}}"
-        ],
-        "environment": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]
+        ]
       }
     }
   ],

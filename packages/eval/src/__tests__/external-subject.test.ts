@@ -48,7 +48,6 @@ test('external subject does not persist output from a failed execution', async (
         config: {
           command: 'competitor',
           args: [],
-          environment: ['SECRET_TOKEN'],
         },
       },
     },
@@ -99,10 +98,10 @@ function externalCell(): ExperimentCell {
     subject: {
       id: 'competitor',
       kind: 'external',
+      credentials: ['SECRET_TOKEN'],
       config: {
         command: 'competitor',
         args: ['task:{{task.id}}:{{repetition}}'],
-        environment: ['SECRET_TOKEN'],
       },
     },
   };

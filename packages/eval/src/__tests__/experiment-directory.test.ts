@@ -25,6 +25,7 @@ function spec(model: string): ExperimentSpec {
       {
         id: 'maka',
         kind: 'maka',
+        credentials: [],
         config: {
           connectionSlug: 'connection',
           model,

@@ -19,6 +19,7 @@ export interface ExecutorSpec {
 export interface SubjectSpec {
   readonly id: string;
   readonly kind: 'maka' | 'external';
+  readonly credentials: readonly string[];
   readonly config: JsonObject;
 }
 

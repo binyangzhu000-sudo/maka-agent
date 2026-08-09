@@ -8,7 +8,7 @@ Experiment → Cells → Attempts → Results
        Runtime Host executes Maka subjects
 ```
 
-An Experiment combines one benchmark, one executor, all subjects, all tasks, a repetition count, one shared budget, and one verifier. Cells are the Cartesian product `task × repetition × subject`. A repetition is a new experimental sample; an infrastructure retry appends a replacement attempt to the same cell; continuation remains internal to Runtime Host.
+An Experiment combines one benchmark, one executor, all subjects, all tasks, a repetition count, one shared budget, and one verifier. Cells are the Cartesian product `task × repetition × subject`. A repetition is a new experimental sample; an infrastructure retry appends a replacement attempt to the same cell; continuation remains internal to Runtime Host. Each subject declares only the credential environment names its cells receive.
 
 Run a fully expanded spec through the public CLI:
 

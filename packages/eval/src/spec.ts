@@ -61,15 +61,26 @@ function decodeExecutor(value: unknown): ExecutorSpec {
 
 function decodeSubject(value: unknown, index: number): SubjectSpec {
   const where = `experiment spec.subjects[${index}]`;
-  const record = exactObject(value, where, ['id', 'kind', 'config']);
+  const record = exactObject(value, where, ['id', 'kind', 'credentials', 'config']);
   if (record.kind !== 'maka' && record.kind !== 'external') {
     throw new Error(`${where}.kind must be maka or external`);
   }
   return {
     id: identifier(record.id, `${where}.id`),
     kind: record.kind,
+    credentials: stringArray(record.credentials, `${where}.credentials`),
     config: jsonObject(record.config, `${where}.config`),
   };
+}
+
+function stringArray(value: unknown, where: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((item) => typeof item === 'string' && item.length > 0)
+  ) {
+    throw new Error(`${where} must contain environment variable names`);
+  }
+  return [...new Set(value)];
 }
 
 function decodeTask(value: unknown, index: number): TaskSpec {

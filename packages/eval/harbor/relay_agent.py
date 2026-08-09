@@ -40,8 +40,10 @@ class RelayAgent(BaseAgent):
         if request.get("token") != self._token or request.get("kind") != "execute":
             raise RuntimeError("invalid Maka Eval relay request")
         command = shlex.join([request["command"], *request["args"]])
+        scope_path = f"/tmp/maka-eval-{self._token}.pid"
+        scoped_command = f"setsid sh -c {shlex.quote(f'echo $$ > {scope_path}; exec {command}')}"
         execution = asyncio.create_task(
-            environment.exec(command, cwd=request["cwd"], env=request["env"])
+            environment.exec(scoped_command, cwd=request["cwd"], env=request["env"])
         )
         control = asyncio.create_task(reader.readline())
         done, _ = await asyncio.wait({execution, control}, return_when=asyncio.FIRST_COMPLETED)
@@ -49,9 +51,29 @@ class RelayAgent(BaseAgent):
             cancellation = json.loads(control.result())
             if cancellation.get("token") != self._token or cancellation.get("kind") != "cancel":
                 raise RuntimeError("invalid Maka Eval relay control")
-            execution.cancel()
+            cancel = request.get("cancel")
+            if isinstance(cancel, dict):
+                with contextlib.suppress(BaseException):
+                    await environment.exec(
+                        shlex.join([cancel["command"], *cancel["args"]]),
+                        cwd=request["cwd"],
+                        env=request["env"],
+                    )
             with contextlib.suppress(BaseException):
-                await execution
+                await environment.exec(
+                    f"kill -TERM -- -$(cat {shlex.quote(scope_path)})",
+                    cwd=request["cwd"],
+                )
+            try:
+                await asyncio.wait_for(asyncio.shield(execution), timeout=10)
+            except TimeoutError:
+                with contextlib.suppress(BaseException):
+                    await environment.exec(
+                        f"kill -KILL -- -$(cat {shlex.quote(scope_path)})",
+                        cwd=request["cwd"],
+                    )
+                with contextlib.suppress(BaseException):
+                    await execution
             return_code, stdout = 130, ""
         else:
             control.cancel()

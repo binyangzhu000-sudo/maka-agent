@@ -46,7 +46,7 @@ async function createHarnessExecutor(
     async prepare({ cell, signal }) {
       const state = await startTrial(cell, input.specPath, options, kind, signal);
       states.set(cell.id, state);
-      return environment(state, options.containerCwd);
+      return environment(state, options.containerCwd, cell.subject.credentials);
     },
     async verify({ cell }) {
       const state = requireState(states, cell.id);
@@ -75,7 +75,11 @@ async function createHarnessExecutor(
   };
 }
 
-function environment(state: RelayState, cwd: string): SubjectExecutionEnvironment {
+function environment(
+  state: RelayState,
+  cwd: string,
+  credentials: readonly string[],
+): SubjectExecutionEnvironment {
   return {
     cwd,
     taskInput: state.taskInput,
@@ -83,14 +87,14 @@ function environment(state: RelayState, cwd: string): SubjectExecutionEnvironmen
     executeExternal: (input) => execute(state, input),
     executeMaka: async (input, options) => {
       const repo = process.env.MAKA_EVAL_CONTAINER_REPO ?? '/opt/maka-agent';
+      const encoded = Buffer.from(JSON.stringify(input)).toString('base64url');
+      const shim = `${repo}/packages/eval/dist/harbor-maka-subject.js`;
       const result = await execute(state, {
         command: 'node',
-        args: [
-          `${repo}/packages/eval/dist/harbor-maka-subject.js`,
-          Buffer.from(JSON.stringify(input)).toString('base64url'),
-        ],
+        args: [shim, 'run', encoded],
+        cancel: { command: 'node', args: [shim, 'cancel', encoded] },
         cwd,
-        environment: [],
+        environment: credentials,
         signal: options?.signal,
       });
       if (result.exitCode !== 0) throw new Error('Maka Hosted execution failed');
@@ -136,7 +140,7 @@ async function startTrial(
         ...options.environment,
         env: {
           ...(isJsonObject(options.environment.env) ? options.environment.env : {}),
-          ...Object.fromEntries(options.credentialEnvironment.map((name) => [name, `\${${name}}`])),
+          ...Object.fromEntries(cell.subject.credentials.map((name) => [name, `\${${name}}`])),
         },
         ...(process.env.MAKA_EVAL_MOUNTS_JSON
           ? { mounts: JSON.parse(process.env.MAKA_EVAL_MOUNTS_JSON) as unknown }
@@ -199,11 +203,11 @@ async function execute(
     readonly cwd: string;
     readonly environment: readonly string[];
     readonly signal?: AbortSignal;
+    readonly cancel?: { readonly command: string; readonly args: readonly string[] };
   },
 ): Promise<{ exitCode: number; stdout: string }> {
   if (state.used) throw new Error('executor Trial already executed its subject');
   state.used = true;
-  input.signal?.throwIfAborted();
   state.socket.write(
     `${JSON.stringify({
       token: state.token,
@@ -211,6 +215,7 @@ async function execute(
       command: input.command,
       args: input.args,
       cwd: input.cwd,
+      ...(input.cancel ? { cancel: input.cancel } : {}),
       env: Object.fromEntries(
         input.environment.flatMap((name) => {
           const value = process.env[name];
@@ -223,8 +228,12 @@ async function execute(
     state.socket.write(`${JSON.stringify({ token: state.token, kind: 'cancel' })}\n`);
   input.signal?.addEventListener('abort', cancel, { once: true });
   if (input.signal?.aborted) cancel();
-  const executed = await readLine(state.lines);
-  input.signal?.removeEventListener('abort', cancel);
+  let executed: Record<string, unknown>;
+  try {
+    executed = await readLine(state.lines);
+  } finally {
+    input.signal?.removeEventListener('abort', cancel);
+  }
   if (
     executed.token !== state.token ||
     executed.kind !== 'executed' ||
@@ -245,20 +254,13 @@ async function readLine(lines: AsyncIterator<string>): Promise<Record<string, un
 
 interface HarnessOptions {
   readonly containerCwd: string;
-  readonly credentialEnvironment: readonly string[];
   readonly environment: JsonObject;
 }
 
 function decodeOptions(value: JsonObject): HarnessOptions {
-  const record = exact(value, ['containerCwd', 'credentialEnvironment', 'environment'], 'options');
+  const record = exact(value, ['containerCwd', 'environment'], 'options');
   if (typeof record.containerCwd !== 'string' || !record.containerCwd.startsWith('/')) {
     throw new Error('executor options.containerCwd must be absolute');
-  }
-  if (
-    !Array.isArray(record.credentialEnvironment) ||
-    !record.credentialEnvironment.every((name) => typeof name === 'string' && name.length > 0)
-  ) {
-    throw new Error('executor options.credentialEnvironment must contain environment names');
   }
   return record as unknown as HarnessOptions;
 }

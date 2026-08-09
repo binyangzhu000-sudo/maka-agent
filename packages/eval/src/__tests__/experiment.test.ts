@@ -20,8 +20,8 @@ describe('experiment cells', () => {
       benchmark: { id: 'bench', version: '1', config: {} },
       executor: { kind: 'harbor', config: {} },
       subjects: [
-        { id: 'maka-default', kind: 'maka', config: {} },
-        { id: 'competitor', kind: 'external', config: {} },
+        { id: 'maka-default', kind: 'maka', credentials: [], config: {} },
+        { id: 'competitor', kind: 'external', credentials: [], config: {} },
       ],
       tasks: [
         { id: 'task-a', input: 'A', config: {} },
@@ -100,7 +100,7 @@ describe('experiment cells', () => {
           id: 'implicit',
           benchmark: { id: 'bench', version: '1', config: {} },
           executor: { kind: 'harbor', config: {} },
-          subjects: [{ id: 'maka', kind: 'maka', config: {} }],
+          subjects: [{ id: 'maka', kind: 'maka', credentials: [], config: {} }],
           tasks: [{ id: 'task', input: 'task', config: {} }],
           budget: {},
           verifier: {},
@@ -112,7 +112,7 @@ describe('experiment cells', () => {
   test('preserves every JSON key in the frozen semantic authority', () => {
     const parsed = parseExperimentSpec(
       JSON.parse(
-        '{"schemaVersion":"maka.eval.v1","id":"prototype","benchmark":{"id":"bench","version":"1","config":{"__proto__":{"mode":"strict"}}},"executor":{"kind":"harbor","config":{}},"subjects":[{"id":"external","kind":"external","config":{}}],"tasks":[{"id":"task","input":"task","config":{}}],"repetitions":1,"budget":{},"verifier":{}}',
+        '{"schemaVersion":"maka.eval.v1","id":"prototype","benchmark":{"id":"bench","version":"1","config":{"__proto__":{"mode":"strict"}}},"executor":{"kind":"harbor","config":{}},"subjects":[{"id":"external","kind":"external","credentials":[],"config":{}}],"tasks":[{"id":"task","input":"task","config":{}}],"repetitions":1,"budget":{},"verifier":{}}',
       ),
     );
 
@@ -141,7 +141,7 @@ describe('cell attempts', () => {
       id: 'replacement',
       benchmark: { id: 'bench', version: '1', config: {} },
       executor: { kind: 'test', config: {} },
-      subjects: [{ id: 'maka', kind: 'maka', config: {} }],
+      subjects: [{ id: 'maka', kind: 'maka', credentials: [], config: {} }],
       tasks: [
         { id: 'valid', input: 'valid', config: {} },
         { id: 'replace', input: 'replace', config: {} },
@@ -284,7 +284,7 @@ function oneCellSpec(): ExperimentSpec {
     id: 'validation',
     benchmark: { id: 'bench', version: '1', config: {} },
     executor: { kind: 'harbor', config: {} },
-    subjects: [{ id: 'external', kind: 'external', config: {} }],
+    subjects: [{ id: 'external', kind: 'external', credentials: [], config: {} }],
     tasks: [{ id: 'task', input: 'task', config: {} }],
     repetitions: 1,
     budget: {},

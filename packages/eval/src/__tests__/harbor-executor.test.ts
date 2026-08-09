@@ -23,11 +23,12 @@ import { connect } from 'node:net';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 if(process.argv.at(-2)!==${JSON.stringify(kind)}) process.exit(64);
 const config = JSON.parse(await readFile(process.argv.at(-1), 'utf8'));
+if(JSON.stringify(config.environment.env)!==JSON.stringify({CELL_KEY:'\${CELL_KEY}'})) process.exit(65);
 const socket = connect(config.agent.kwargs.relay_port, config.agent.kwargs.relay_host);
 socket.setEncoding('utf8');
 await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
 socket.write(JSON.stringify({token:config.agent.kwargs.relay_token,kind:'ready',instruction:'Solve inside Harbor'})+'\\n');
-const request=JSON.parse(await new Promise(resolve => socket.once('data', resolve)));
+const request=JSON.parse(String(await new Promise(resolve => socket.once('data', resolve))).split('\\n')[0]);
 socket.write(JSON.stringify({token:config.agent.kwargs.relay_token,kind:'executed',exitCode:0,stdout:JSON.stringify({schemaVersion:'maka.external_subject_result.v1',output:request.args.at(-1),usage:{inputTokens:1,outputTokens:1,cacheReadTokens:0,cacheWriteTokens:0,reasoningTokens:0,totalTokens:2},costUsd:0.01,artifacts:[]})})+'\\n');
 socket.end();
 const dir=config.trials_dir+'/'+config.trial_name;
@@ -46,7 +47,6 @@ await writeFile(dir+'/result.json',JSON.stringify({verifier_result:{rewards:{rew
         specPath: join(root, 'spec.json'),
         options: {
           containerCwd: '/app',
-          credentialEnvironment: [],
           environment: { type: 'docker', delete: true },
         },
       });
@@ -64,6 +64,36 @@ await writeFile(dir+'/result.json',JSON.stringify({verifier_result:{rewards:{rew
       );
       assert.match(String(verified.artifacts[0]?.trialName), /^task-1--1--external-/);
       await executor.cleanup?.({ cell, environment });
+
+      const cancelledExecutor = await createExecutor({
+        spec,
+        specPath: join(root, 'spec.json'),
+        options: {
+          containerCwd: '/app',
+          environment: { type: 'docker', delete: true },
+        },
+      });
+      const cancelledCell = { ...cell, id: 'task-1::1::cancelled' };
+      const cancelledEnvironment = await cancelledExecutor.prepare({ cell: cancelledCell });
+      const controller = new AbortController();
+      controller.abort();
+      const cancelledSubject = await createExternalSubjectAdapter().execute({
+        cell: cancelledCell,
+        context: { ...cancelledEnvironment, signal: controller.signal },
+      });
+      const cancelledVerification = await Promise.race([
+        cancelledExecutor.verify({
+          cell: cancelledCell,
+          environment: cancelledEnvironment,
+          subject: cancelledSubject,
+        }),
+        new Promise<undefined>((resolve) => setTimeout(resolve, 500)),
+      ]);
+      assert.ok(cancelledVerification, 'pre-aborted Trial did not settle');
+      await cancelledExecutor.cleanup?.({
+        cell: cancelledCell,
+        environment: cancelledEnvironment,
+      });
     } finally {
       if (previous === undefined) delete process.env[environmentName];
       else process.env[environmentName] = previous;
@@ -102,7 +132,8 @@ function experiment(kind: 'harbor' | 'pier'): ExperimentSpec {
       {
         id: 'external',
         kind: 'external',
-        config: { command: 'agent', args: ['{{task.input}}'], environment: [] },
+        credentials: ['CELL_KEY'],
+        config: { command: 'agent', args: ['{{task.input}}'] },
       },
     ],
     tasks: [

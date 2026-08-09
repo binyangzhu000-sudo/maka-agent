@@ -30,7 +30,7 @@ export function createExternalSubjectAdapter(options?: {
           command: config.command,
           args,
           cwd: context.cwd,
-          environment: config.environment,
+          environment: cell.subject.credentials,
           signal: context.signal,
         });
         const durationMs = now() - startedAt;
@@ -79,7 +79,6 @@ export function createExternalSubjectAdapter(options?: {
 interface ExternalSubjectConfig {
   readonly command: string;
   readonly args: readonly string[];
-  readonly environment: readonly string[];
 }
 
 interface ExternalSubjectProtocolResult {
@@ -142,7 +141,7 @@ function decodeUsage(value: unknown): NormalizedUsage {
 }
 
 function decodeExternalSubjectConfig(config: JsonObject): ExternalSubjectConfig {
-  const expected = ['command', 'args', 'environment'];
+  const expected = ['command', 'args'];
   for (const key of Object.keys(config)) {
     if (!expected.includes(key)) throw new Error(`external subject config.${key} is not supported`);
   }
@@ -154,12 +153,6 @@ function decodeExternalSubjectConfig(config: JsonObject): ExternalSubjectConfig 
   }
   if (!Array.isArray(config.args) || !config.args.every((value) => typeof value === 'string')) {
     throw new Error('external subject config.args must be an array of strings');
-  }
-  if (
-    !Array.isArray(config.environment) ||
-    !config.environment.every((value) => typeof value === 'string' && value.length > 0)
-  ) {
-    throw new Error('external subject config.environment must be an array of names');
   }
   return config as unknown as ExternalSubjectConfig;
 }
