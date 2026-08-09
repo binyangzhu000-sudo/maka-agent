@@ -332,32 +332,7 @@ describe('Host Session retirement coordinator', () => {
       const { header: child } = await harness.store.createSubagent(
         sessionInput('Worktree child', {
           permissionMode: 'execute',
-          subagentParent: {
-            kind: 'subagent',
-            parentSessionId: harness.rootId,
-            spawnedBy: {
-              parentRunId: 'parent-run',
-              parentTurnId: 'parent-turn',
-              toolCallId: 'spawn-call',
-            },
-            lifecycle: 'foreground',
-          },
-          subagentRuntime: {
-            schemaVersion: 1,
-            definitionVersion: 1,
-            agentId: 'implementation',
-            agentName: 'Implementation',
-            profile: 'implementation',
-            systemPrompt: 'Implement the task.',
-            toolNames: ['Read', 'Write'],
-            categoryPolicy: {},
-          },
-          subagentSpawn: {
-            schemaVersion: 1,
-            requestFingerprint: 'c'.repeat(64),
-            initialTurnId: 'child-turn',
-            initialRunId: 'child-run',
-          },
+          ...subagentIdentity(harness.rootId, 'c'),
           cwd: binding.worktreePath,
           subagentWorkspace: binding,
         }),
@@ -395,6 +370,28 @@ describe('Host Session retirement coordinator', () => {
         'Worktree cleanup did not run',
       );
       assert.deepEqual(harness.actions.retiredWorktrees, [binding.leaseId]);
+    });
+  });
+
+  test('Hosted stop converges on descendants committed while their parent stops', async () => {
+    await withHarness(async (harness) => {
+      let childId: string | undefined;
+      harness.stopRoot = async (sessionId) => {
+        if (sessionId !== harness.rootId || childId) return;
+        const { header } = await harness.store.createSubagent(
+          sessionInput('Late child', {
+            ...subagentIdentity(harness.rootId, 'd'),
+          }),
+        );
+        childId = header.id;
+        harness.blockers.resource.add(childId);
+      };
+
+      const owned = await harness.coordinator.stopHostedExecution(harness.rootId);
+
+      assert.ok(childId);
+      assert.equal(owned.includes(childId), true);
+      assert.equal(harness.blockers.resource.has(childId), false);
     });
   });
 
@@ -769,6 +766,7 @@ async function withHarness(
       updateSiblingBeforeRemoveCommit: false,
       disposeBackend: undefined,
       finalizeWorkspacePatches: undefined,
+      stopRoot: undefined,
       retireWorktree: undefined,
       coordinator: undefined as unknown as HostSessionRetirementCoordinator,
     };
@@ -804,6 +802,7 @@ async function withHarness(
       memoryExtractionLane,
       root: {
         stopSession: async (sessionId) => {
+          await harness.stopRoot?.(sessionId);
           blockers.root.delete(sessionId);
           blockers.message.delete(sessionId);
           blockers.interaction.delete(sessionId);
@@ -965,9 +964,41 @@ interface RetirementHarness {
   updateSiblingBeforeRemoveCommit: boolean;
   disposeBackend: ((sessionId: string) => Promise<void>) | undefined;
   finalizeWorkspacePatches: ((sessionId: string) => Promise<void>) | undefined;
+  stopRoot: ((sessionId: string) => Promise<void>) | undefined;
   retireWorktree:
     | ((binding: import('@maka/core').SubagentWorkspaceBinding) => Promise<void>)
     | undefined;
+}
+
+function subagentIdentity(parentSessionId: string, identity: string) {
+  return {
+    subagentParent: {
+      kind: 'subagent' as const,
+      parentSessionId,
+      spawnedBy: {
+        parentRunId: 'parent-run',
+        parentTurnId: 'parent-turn',
+        toolCallId: `${identity}-spawn`,
+      },
+      lifecycle: 'foreground' as const,
+    },
+    subagentRuntime: {
+      schemaVersion: 1 as const,
+      definitionVersion: 1,
+      agentId: 'implementation',
+      agentName: 'Implementation',
+      profile: 'implementation',
+      systemPrompt: 'Implement the task.',
+      toolNames: ['Read'],
+      categoryPolicy: {},
+    },
+    subagentSpawn: {
+      schemaVersion: 1 as const,
+      requestFingerprint: identity.repeat(64),
+      initialTurnId: `${identity}-turn`,
+      initialRunId: `${identity}-run`,
+    },
+  };
 }
 
 async function waitFor(

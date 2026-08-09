@@ -140,6 +140,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   readonly #manager: AutomationManager;
   readonly #fireCoordinator: HostAutomationFireCoordinator;
   readonly #pendingFires = new Map<string, AutomationPendingFire>();
+  readonly #targetSessionsByOwner = new Map<string, Set<string>>();
   readonly #retiringSessions = new Set<string>();
 
   #revision = 0;
@@ -263,7 +264,13 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
         settled = true;
         for (const sessionId of unique) this.#retiringSessions.delete(sessionId);
       };
-      return Object.freeze({ commit: finish, rollback: finish });
+      return Object.freeze({
+        commit: () => {
+          finish();
+          for (const sessionId of unique) this.#targetSessionsByOwner.delete(sessionId);
+        },
+        rollback: finish,
+      });
     });
   }
 
@@ -276,12 +283,16 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       );
       const targetSessionIds = [
         ...new Set(
-          pending
-            .map((fire) => fire.targetSessionId)
-            .filter((targetSessionId) => targetSessionId !== sessionId),
+          [
+            ...(this.#targetSessionsByOwner.get(sessionId) ?? []),
+            ...pending.map((fire) => fire.targetSessionId),
+          ].filter((targetSessionId) => targetSessionId !== sessionId),
         ),
       ];
-      if (pending.length === 0 && owned.length === 0) return targetSessionIds;
+      if (pending.length === 0 && owned.length === 0) {
+        this.#targetSessionsByOwner.delete(sessionId);
+        return targetSessionIds;
+      }
       const before = this.#snapshot();
       for (const fire of pending) {
         const automation = this.#manager.get(fire.automationId);
@@ -296,6 +307,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       }
       for (const automation of owned) this.#manager.delete(automation.id, sessionId);
       await this.#commitOrRestore(before);
+      this.#targetSessionsByOwner.delete(sessionId);
       return targetSessionIds;
     });
   }
@@ -762,6 +774,11 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       };
       this.#pendingFires.set(automationId, fire);
       await this.#commitOrRestore(before);
+      if (fire.targetSessionId !== started.sessionId) {
+        const targets = this.#targetSessionsByOwner.get(started.sessionId) ?? new Set<string>();
+        targets.add(fire.targetSessionId);
+        this.#targetSessionsByOwner.set(started.sessionId, targets);
+      }
       return cloneFire(this.#pendingFires.get(automationId) ?? fire);
     });
   }

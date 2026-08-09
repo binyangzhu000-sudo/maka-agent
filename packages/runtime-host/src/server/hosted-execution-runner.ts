@@ -9,11 +9,7 @@ import type {
   SessionCreateInput,
   TurnSnapshot,
 } from '../protocol/index.js';
-import type { HostSessionCatalogCoordinator } from './session-catalog-coordinator.js';
-import type { HostSessionRetirementCoordinator } from './session-retirement-coordinator.js';
-import type { RootTurnCoordinator } from './root-turn-coordinator.js';
-import type { HostUsagePricingCoordinator } from './usage-pricing-coordinator.js';
-import type { ConnectionContext } from './operation-dispatcher.js';
+import type { ConnectionContext, OperationHandlerMap } from './operation-dispatcher.js';
 
 const EMPTY_USAGE: HostedExecutionUsage = {
   inputTokens: 0,
@@ -25,10 +21,18 @@ const EMPTY_USAGE: HostedExecutionUsage = {
 };
 
 export interface HostHostedExecutionRunnerInput {
-  readonly sessions: HostSessionCatalogCoordinator;
-  readonly root: RootTurnCoordinator;
-  readonly retirement: HostSessionRetirementCoordinator;
-  readonly usage: HostUsagePricingCoordinator;
+  readonly sessions: {
+    readonly handlers: Pick<OperationHandlerMap, 'session.create' | 'session.catalog.query'>;
+  };
+  readonly root: {
+    readonly handlers: Pick<OperationHandlerMap, 'turn.start' | 'turn.query'>;
+  };
+  readonly retirement: {
+    readonly handlers: Pick<OperationHandlerMap, 'session.remove'>;
+    readonly stopHostedExecution: (sessionId: string) => Promise<string[]>;
+    readonly readExecutionFamilySessionIds: (sessionId: string) => Promise<readonly string[]>;
+  };
+  readonly usage: { readonly handlers: Pick<OperationHandlerMap, 'usage.query'> };
   readonly context: ConnectionContext;
   readonly now?: () => number;
   readonly newId?: () => string;
@@ -48,11 +52,11 @@ export class HostHostedExecutionRunner {
     const startedAt = (this.#input.now ?? Date.now)();
     const sessionId = input.executionId;
     const turnId = (this.#input.newId ?? randomUUID)();
-    await requireSuccess(
-      this.#input.sessions.handlers['session.create'](sessionInput(input), this.#input.context),
-    );
     let terminal: TurnSnapshot | undefined;
     try {
+      await requireSuccess(
+        this.#input.sessions.handlers['session.create'](sessionInput(input), this.#input.context),
+      );
       if (!signal.aborted) {
         const started = await requireSuccess(
           this.#input.root.handlers['turn.start'](

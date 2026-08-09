@@ -148,7 +148,6 @@ export class HostSessionRetirementCoordinator {
     const pending = [rootSessionId];
     while (pending.length > 0) {
       const rootId = pending.shift()!;
-      if (stopped.has(rootId)) continue;
       let sessionIds: readonly string[];
       try {
         sessionIds = await this.#readHostedExecutionSessionIds(rootId);
@@ -161,6 +160,8 @@ export class HostSessionRetirementCoordinator {
         }
         throw error;
       }
+      sessionIds = sessionIds.filter((sessionId) => !stopped.has(sessionId));
+      if (sessionIds.length === 0) continue;
       for (const sessionId of sessionIds) stopped.add(sessionId);
       for (const sessionId of sessionIds) this.#goals.stopSession(sessionId);
       await Promise.all(sessionIds.map((sessionId) => this.#graphWake.stopSession(sessionId)));
@@ -179,6 +180,7 @@ export class HostSessionRetirementCoordinator {
       const targets = await Promise.all(
         sessionIds.map((sessionId) => this.#automation.stopHostedExecution(sessionId)),
       );
+      pending.push(rootId);
       for (const target of targets.flat()) if (!stopped.has(target)) pending.push(target);
     }
     return [...stopped];

@@ -588,6 +588,40 @@ describe('Host Automation coordinator', () => {
     });
   });
 
+  test('Hosted execution stop retains ownership of a completed Cron Session', async () => {
+    await withHarness(async (harness) => {
+      await harness.coordinator.prepareRecovery();
+      await harness.coordinator.recover();
+      harness.coordinator.start();
+      const created = await harness.coordinator.create({
+        kind: 'cron',
+        name: 'completed follow-up',
+        prompt: 'Complete before the owner exits.',
+        sessionId: 'creator-session',
+        schedule: { type: 'interval', seconds: 60 },
+      });
+      assert.ok(!('error' in created));
+      if ('error' in created) return;
+      harness.now = created.nextFireAt ?? assert.fail('Expected a scheduled fire');
+      harness.fireTimer();
+      await waitFor(
+        'Cron fire to enter running state',
+        async () => (await harness.store.read()).pendingFires[0]?.status === 'running',
+      );
+      const fire = (await harness.store.read()).pendingFires[0];
+      assert.ok(fire);
+      harness.finishRun();
+      await waitFor(
+        'Cron fire to settle',
+        async () => (await harness.store.read()).pendingFires.length === 0,
+      );
+
+      assert.deepEqual(await harness.coordinator.stopHostedExecution('creator-session'), [
+        fire.targetSessionId,
+      ]);
+    });
+  });
+
   test('a Session that can no longer mutate is not reported to the model as a wrong status', async () => {
     await withHarness(async (harness) => {
       await harness.coordinator.prepareRecovery();
