@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
-  createHarborExecutorAdapter,
+  createExperimentExecutorAdapter,
   runMakaEvalCli,
   type SubjectExecutionResult,
 } from '../index.js';
@@ -60,7 +60,7 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
   const verified: string[] = [];
   const external: string[] = [];
   const sessions: Array<{ name?: string; orchestrationMode?: string }> = [];
-  const executor = createHarborExecutorAdapter({
+  const executor = createExperimentExecutorAdapter('harbor', {
     async prepare(cell) {
       prepared.push(cell.subject.id);
       return {

@@ -39,9 +39,8 @@ export {
   createLocalExternalExecution,
 } from './external-subject.js';
 export {
-  createHarborExecutorAdapter,
-  createPierExecutorAdapter,
-  type BenchmarkExecutorDriver,
+  createExperimentExecutorAdapter,
+  type ExperimentExecutorDriver,
   type ExecutorVerificationResult,
 } from './executor-adapter.js';
 export {

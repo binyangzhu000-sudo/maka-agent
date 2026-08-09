@@ -21,7 +21,7 @@ export interface ExecutorVerificationResult {
   readonly artifacts: readonly JsonObject[];
 }
 
-export interface BenchmarkExecutorDriver {
+export interface ExperimentExecutorDriver {
   prepare(cell: ExperimentCell): Promise<SubjectExecutionContext>;
   verify(input: {
     readonly cell: ExperimentCell;
@@ -34,17 +34,9 @@ export interface BenchmarkExecutorDriver {
   }): Promise<void>;
 }
 
-export function createHarborExecutorAdapter(driver: BenchmarkExecutorDriver): ExperimentExecutor {
-  return createExecutorAdapter('harbor', driver);
-}
-
-export function createPierExecutorAdapter(driver: BenchmarkExecutorDriver): ExperimentExecutor {
-  return createExecutorAdapter('pier', driver);
-}
-
-function createExecutorAdapter(
-  kind: 'harbor' | 'pier',
-  driver: BenchmarkExecutorDriver,
+export function createExperimentExecutorAdapter(
+  kind: string,
+  driver: ExperimentExecutorDriver,
 ): ExperimentExecutor {
   return {
     kind,
