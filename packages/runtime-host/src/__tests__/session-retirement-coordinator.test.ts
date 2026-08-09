@@ -26,40 +26,6 @@ const CONNECTION_CONTEXT: ConnectionContext = {
 };
 
 describe('Host Session retirement coordinator', () => {
-  test('stops the whole Session authority before ephemeral retirement', async () => {
-    await withHarness(async (harness) => {
-      harness.blockers.root.add(harness.rootId);
-      harness.blockers.goal.add(harness.rootId);
-      harness.blockers.message.add(harness.rootId);
-      harness.blockers.interaction.add(harness.rootId);
-      harness.blockers.resource.add(harness.rootId);
-      harness.blockers.effect.add(harness.rootId);
-      harness.blockers.graph.add(harness.rootId);
-      harness.blockers.graphWake.add(harness.rootId);
-      harness.blockers.automation.add(harness.rootId);
-
-      assert.deepEqual(
-        await harness.coordinator.handlers['session.stop'](
-          { sessionId: harness.rootId },
-          CONNECTION_CONTEXT,
-        ),
-        {
-          ok: true,
-          result: { kind: 'stopped', sessionId: harness.rootId },
-        },
-      );
-      assert.equal(harness.blockers.root.has(harness.rootId), false);
-      assert.equal(harness.blockers.goal.has(harness.rootId), false);
-      assert.equal(harness.blockers.message.has(harness.rootId), false);
-      assert.equal(harness.blockers.interaction.has(harness.rootId), false);
-      assert.equal(harness.blockers.resource.has(harness.rootId), false);
-      assert.equal(harness.blockers.effect.has(harness.rootId), false);
-      assert.equal(harness.blockers.graph.has(harness.rootId), false);
-      assert.equal(harness.blockers.graphWake.has(harness.rootId), false);
-      assert.equal(harness.blockers.automation.has(harness.rootId), false);
-    });
-  });
-
   test('archives, restores, and removes one whole edit-and-resend family', async () => {
     await withHarness(async (harness) => {
       const archived = await harness.coordinator.handlers['session.lifecycle.set'](
@@ -849,8 +815,9 @@ async function withHarness(
         unarchiveSessions: () => undefined,
       },
       automation: {
-        stopSession: async (sessionId) => {
+        stopHostedExecution: async (sessionId) => {
           blockers.automation.delete(sessionId);
+          return [];
         },
         beginSessionRetirement: async (sessionIds) => {
           if (sessionIds.some((sessionId) => blockers.automation.has(sessionId))) {
@@ -875,11 +842,13 @@ async function withHarness(
         hasLiveSessionState: async (sessionId) => blockers.graph.has(sessionId),
         stop: async (sessionId) => {
           blockers.graph.delete(sessionId);
-          blockers.graphWake.delete(sessionId);
         },
       },
       graphWake: {
         hasLiveSessionState: (sessionId) => blockers.graphWake.has(sessionId),
+        stopSession: async (sessionId) => {
+          blockers.graphWake.delete(sessionId);
+        },
         retireSessions: async (sessionIds) => {
           actions.retiredGraphWakes.push(...sessionIds);
           return sessionIds.length;

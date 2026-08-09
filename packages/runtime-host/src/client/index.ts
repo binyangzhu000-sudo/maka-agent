@@ -34,12 +34,14 @@ export {
 } from './connect-or-spawn.js';
 export { type ClientCapabilityProvider } from './client-capability.js';
 export {
-  executeEphemeralRuntimeHostSession,
-  type EphemeralRuntimeHostExecutionInput,
-  type EphemeralRuntimeHostExecutionOptions,
-  type EphemeralRuntimeHostExecutionResult,
-  type EphemeralRuntimeHostUsage,
-} from './ephemeral-execution.js';
+  executeHostedRuntimeHostSubject,
+  type HostedExecutionClientOptions,
+} from './hosted-execution.js';
+export type {
+  HostedExecutionProjection,
+  HostedExecutionStartInput,
+  HostedExecutionUsage,
+} from '../protocol/hosted-execution.js';
 export { consumeAccessCredentialDelivery } from '../control/access-credential-delivery.js';
 export {
   createOAuthPresentationClientProvider,

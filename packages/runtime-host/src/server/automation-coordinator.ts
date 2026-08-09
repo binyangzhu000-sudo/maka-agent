@@ -267,15 +267,21 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
     });
   }
 
-  stopSession(sessionId: string): Promise<void> {
+  stopHostedExecution(sessionId: string): Promise<readonly string[]> {
     return this.#exclusive(async () => {
+      const owned = this.#manager.listForSession(sessionId);
+      const ownedIds = new Set(owned.map((automation) => automation.id));
       const pending = [...this.#pendingFires.values()].filter(
-        (fire) => fire.targetSessionId === sessionId,
+        (fire) => fire.targetSessionId === sessionId || ownedIds.has(fire.automationId),
       );
-      const disposable = this.#manager
-        .listForSession(sessionId)
-        .filter((automation) => automation.durable !== true);
-      if (pending.length === 0 && disposable.length === 0) return;
+      const targetSessionIds = [
+        ...new Set(
+          pending
+            .map((fire) => fire.targetSessionId)
+            .filter((targetSessionId) => targetSessionId !== sessionId),
+        ),
+      ];
+      if (pending.length === 0 && owned.length === 0) return targetSessionIds;
       const before = this.#snapshot();
       for (const fire of pending) {
         const automation = this.#manager.get(fire.automationId);
@@ -288,8 +294,9 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
         }
         this.#pendingFires.delete(fire.automationId);
       }
-      for (const automation of disposable) this.#manager.delete(automation.id, sessionId);
+      for (const automation of owned) this.#manager.delete(automation.id, sessionId);
       await this.#commitOrRestore(before);
+      return targetSessionIds;
     });
   }
 

@@ -19,7 +19,6 @@ import {
   type SessionLifecycleSetInput,
   type SessionRemoveInput,
   type SessionRemoveResult,
-  type SessionStopInput,
 } from '../protocol/index.js';
 import {
   HostAutomationSessionBusyError,
@@ -74,6 +73,7 @@ type RetirementGraph = {
 };
 type RetirementGraphWake = {
   hasLiveSessionState(sessionId: string): boolean;
+  stopSession(sessionId: string): Promise<void>;
   retireSessions(sessionIds: readonly string[]): Promise<number>;
 };
 type RetirementManager = Pick<
@@ -95,7 +95,7 @@ export interface HostSessionRetirementCoordinatorOptions {
   readonly goals: RetirementGoals;
   readonly automation: {
     beginSessionRetirement(sessionIds: readonly string[]): Promise<HostAutomationSessionRetirement>;
-    stopSession(sessionId: string): Promise<void>;
+    stopHostedExecution(sessionId: string): Promise<readonly string[]>;
   };
   readonly resources: RetirementResources;
   readonly sessionEffects: RetirementSessionEffects;
@@ -139,15 +139,31 @@ class SessionRetirementBusyError extends Error {
 /** Host-owned archive, unarchive, remove, and revision-family commit authority. */
 export class HostSessionRetirementCoordinator {
   readonly handlers: SessionRetirementOperationHandlerMap = {
-    'session.stop': (input) => this.#stop(input),
     'session.lifecycle.set': (input) => this.#setLifecycle(input),
     'session.remove': (input) => this.#remove(input),
   };
 
-  async #stop(input: SessionStopInput): Promise<OperationOutcome<'session.stop'>> {
-    try {
-      const sessionIds = await this.#readFamilySessionIds(input.sessionId);
+  async stopHostedExecution(rootSessionId: string): Promise<string[]> {
+    const stopped = new Set<string>();
+    const pending = [rootSessionId];
+    while (pending.length > 0) {
+      const rootId = pending.shift()!;
+      if (stopped.has(rootId)) continue;
+      let sessionIds: readonly string[];
+      try {
+        sessionIds = await this.#readFamilySessionIds(rootId);
+      } catch (error) {
+        if (
+          error instanceof SessionRetirementMissingSessionError ||
+          isSessionNotFoundError(error)
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      for (const sessionId of sessionIds) stopped.add(sessionId);
       for (const sessionId of sessionIds) this.#goals.stopSession(sessionId);
+      await Promise.all(sessionIds.map((sessionId) => this.#graphWake.stopSession(sessionId)));
       await Promise.all(
         sessionIds.map(async (sessionId) => {
           if (await this.#graph.hasLiveSessionState(sessionId)) await this.#graph.stop(sessionId);
@@ -160,14 +176,12 @@ export class HostSessionRetirementCoordinator {
       );
       await Promise.all(sessionIds.map((sessionId) => this.#sessionEffects.stopSession(sessionId)));
       await Promise.all(sessionIds.map((sessionId) => this.#resources.stopSession(sessionId)));
-      await Promise.all(sessionIds.map((sessionId) => this.#automation.stopSession(sessionId)));
-      return { ok: true, result: { kind: 'stopped', sessionId: input.sessionId } };
-    } catch (error) {
-      if (isSessionNotFoundError(error)) {
-        return { ok: false, error: { code: 'not_found', message: 'Session does not exist' } };
-      }
-      return { ok: false, error: { code: 'internal_failure', message: 'Session stop failed' } };
+      const targets = await Promise.all(
+        sessionIds.map((sessionId) => this.#automation.stopHostedExecution(sessionId)),
+      );
+      for (const target of targets.flat()) if (!stopped.has(target)) pending.push(target);
     }
+    return [...stopped];
   }
 
   readonly #stores: RetirementStores;
@@ -228,6 +242,10 @@ export class HostSessionRetirementCoordinator {
   async close(): Promise<void> {
     this.#closing = true;
     await this.#cleanupWorker;
+  }
+
+  readExecutionFamilySessionIds(sessionId: string): Promise<string[]> {
+    return this.#readFamilySessionIds(sessionId);
   }
 
   async #setLifecycle(

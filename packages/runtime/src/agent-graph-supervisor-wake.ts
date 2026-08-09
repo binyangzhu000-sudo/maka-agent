@@ -227,8 +227,11 @@ export interface AgentGraphSupervisorWakeInput {
 export class AgentGraphSupervisorWakeCoordinator {
   readonly #input: AgentGraphSupervisorWakeInput;
   readonly #tasks = new Set<Promise<void>>();
+  readonly #tasksBySession = new Map<string, Set<Promise<void>>>();
   readonly #pendingWakeIds = new Set<string>();
   readonly #abortController = new AbortController();
+  readonly #sessionAborts = new Map<string, AbortController>();
+  readonly #retiredSessions = new Set<string>();
   readonly #maxDeliveryAttempts: number;
   #closed = false;
 
@@ -246,6 +249,7 @@ export class AgentGraphSupervisorWakeCoordinator {
   ): Promise<void> | undefined {
     if (
       this.#closed ||
+      this.#retiredSessions.has(rootSessionId) ||
       (!this.#input.shouldWake && (!result || !isAgentGraphSupervisorMilestone(result)))
     ) {
       return undefined;
@@ -269,7 +273,7 @@ export class AgentGraphSupervisorWakeCoordinator {
    * proves that waiter is gone and makes the wake eligible for a fresh turn.
    */
   notifyPermissionResponse(rootSessionId: string): Promise<void> | undefined {
-    if (this.#closed) return undefined;
+    if (this.#closed || this.#retiredSessions.has(rootSessionId)) return undefined;
     return this.#runTracked(rootSessionId, async () => {
       try {
         await this.#settlePermissionResponse(rootSessionId);
@@ -302,6 +306,15 @@ export class AgentGraphSupervisorWakeCoordinator {
 
   hasLiveSessionState(rootSessionId: string): boolean {
     return this.#input.activityRegistry.whenIdle(rootSessionId) !== undefined;
+  }
+
+  async stopSession(rootSessionId: string): Promise<void> {
+    this.#retiredSessions.add(rootSessionId);
+    const abort = this.#sessionAbort(rootSessionId);
+    abort.abort();
+    await Promise.all([...(this.#tasksBySession.get(rootSessionId) ?? [])]);
+    await this.retireSessions([rootSessionId]);
+    this.#sessionAborts.delete(rootSessionId);
   }
 
   async retireSessions(rootSessionIds: readonly string[]): Promise<number> {
@@ -351,7 +364,13 @@ export class AgentGraphSupervisorWakeCoordinator {
   }
 
   #scheduleRecoveredWake(wake: AgentGraphSupervisorWakeRecord): void {
-    if (this.#closed || this.#pendingWakeIds.has(wake.wakeId)) return;
+    if (
+      this.#closed ||
+      this.#retiredSessions.has(wake.rootSessionId) ||
+      this.#pendingWakeIds.has(wake.wakeId)
+    ) {
+      return;
+    }
     this.#pendingWakeIds.add(wake.wakeId);
     void this.#runTracked(wake.rootSessionId, async () => {
       try {
@@ -372,11 +391,37 @@ export class AgentGraphSupervisorWakeCoordinator {
       .then(operation)
       .finally(() => residency?.release());
     this.#tasks.add(task);
+    const sessionTasks = this.#tasksBySession.get(rootSessionId) ?? new Set<Promise<void>>();
+    sessionTasks.add(task);
+    this.#tasksBySession.set(rootSessionId, sessionTasks);
     void task.then(
-      () => this.#tasks.delete(task),
-      () => this.#tasks.delete(task),
+      () => this.#releaseTask(rootSessionId, task),
+      () => this.#releaseTask(rootSessionId, task),
     );
     return task;
+  }
+
+  #releaseTask(rootSessionId: string, task: Promise<void>): void {
+    this.#tasks.delete(task);
+    const sessionTasks = this.#tasksBySession.get(rootSessionId);
+    sessionTasks?.delete(task);
+    if (sessionTasks?.size === 0) this.#tasksBySession.delete(rootSessionId);
+  }
+
+  #sessionAbort(rootSessionId: string): AbortController {
+    let abort = this.#sessionAborts.get(rootSessionId);
+    if (!abort) {
+      abort = new AbortController();
+      this.#sessionAborts.set(rootSessionId, abort);
+    }
+    return abort;
+  }
+
+  #sessionSignal(rootSessionId: string): AbortSignal {
+    return AbortSignal.any([
+      this.#abortController.signal,
+      this.#sessionAbort(rootSessionId).signal,
+    ]);
   }
 
   async #resumeWake(wake: AgentGraphSupervisorWakeRecord): Promise<void> {
@@ -401,7 +446,11 @@ export class AgentGraphSupervisorWakeCoordinator {
     snapshot: AgentGraphClientSnapshot,
     result?: AgentGraphScheduleReconciliationResult,
   ): Promise<void> {
-    const presentation = (await this.#input.renderWake?.(wake.rootSessionId, snapshot, result)) ?? {
+    const signal = this.#sessionSignal(wake.rootSessionId);
+    const presentation = (await waitForAbort(
+      Promise.resolve(this.#input.renderWake?.(wake.rootSessionId, snapshot, result)),
+      signal,
+    )) ?? {
       text: renderAgentGraphSupervisorWakePrompt(snapshot, result),
       displayText: 'Agent graph reached a supervisor checkpoint.',
       orchestrationMode: 'graph' as const,
@@ -414,10 +463,7 @@ export class AgentGraphSupervisorWakeCoordinator {
         return;
       }
       let overflowAttempt: { attemptId: string; turnId: string; failureReason: string } | undefined;
-      const activity = await this.#input.activityRegistry.acquire(
-        wake.rootSessionId,
-        this.#abortController.signal,
-      );
+      const activity = await this.#input.activityRegistry.acquire(wake.rootSessionId, signal);
       try {
         if (this.#closed) return;
         const attemptId = this.#input.newId();
@@ -450,7 +496,7 @@ export class AgentGraphSupervisorWakeCoordinator {
               },
             },
             activity,
-            this.#abortController.signal,
+            signal,
             () => this.#isWakeCurrent(wake),
           );
           if (outcome.kind === 'completed') {
@@ -652,7 +698,7 @@ export class AgentGraphSupervisorWakeCoordinator {
   async #settlePermissionResponse(rootSessionId: string): Promise<void> {
     const activity = await this.#input.activityRegistry.acquire(
       rootSessionId,
-      this.#abortController.signal,
+      this.#sessionSignal(rootSessionId),
     );
     const retryable: AgentGraphSupervisorWakeRecord[] = [];
     try {
@@ -692,6 +738,28 @@ export class AgentGraphSupervisorWakeCoordinator {
     }
     for (const wake of retryable) this.#scheduleRecoveredWake(wake);
   }
+}
+
+async function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw new DOMException('Session stopped', 'AbortError');
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException('Session stopped', 'AbortError'));
+    };
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    void operation.then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }
 
 export function isAgentGraphSupervisorMilestone(

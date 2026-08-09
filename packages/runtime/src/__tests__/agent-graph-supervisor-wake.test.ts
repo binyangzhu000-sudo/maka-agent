@@ -703,6 +703,35 @@ describe('Agent Graph supervisor wake delivery', () => {
       store.close();
     }
   });
+
+  test('Session stop aborts only that root wake and waits for it to settle', async () => {
+    const store = createSqliteSessionMetadataStore(':memory:');
+    const started = deferred();
+    const coordinator = new AgentGraphSupervisorWakeCoordinator({
+      activityRegistry: new SessionActivityRegistry(),
+      wakeStore: store,
+      readSnapshot: async () => snapshot(),
+      startTurn: async (_sessionId, input, _activity, abortSignal) => {
+        started.resolve();
+        await new Promise<void>((resolve) =>
+          abortSignal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return { kind: 'aborted', turnId: input.turnId };
+      },
+      inspectAttempt: async () => 'missing',
+      newId: sequentialIds(),
+    });
+    try {
+      coordinator.notify('root-session', reconciliation());
+      await started.promise;
+      await coordinator.stopSession('root-session');
+      assert.equal(coordinator.hasLiveSessionState('root-session'), false);
+      assert.equal(coordinator.notify('root-session', reconciliation()), undefined);
+    } finally {
+      await coordinator.close();
+      store.close();
+    }
+  });
 });
 
 async function createRunningAttempt(

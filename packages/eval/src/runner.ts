@@ -11,9 +11,9 @@ import {
   type NormalizedUsage,
 } from './result.js';
 import type {
-  EphemeralRuntimeHostExecutionInput,
-  EphemeralRuntimeHostExecutionOptions,
-  EphemeralRuntimeHostExecutionResult,
+  HostedExecutionClientOptions,
+  HostedExecutionProjection,
+  HostedExecutionStartInput,
 } from '@maka/runtime-host/client';
 
 export interface SubjectExecutionResult {
@@ -29,9 +29,9 @@ export interface SubjectExecutionEnvironment {
   readonly cwd: string;
   readonly metadata: JsonObject;
   readonly executeMaka?: (
-    input: EphemeralRuntimeHostExecutionInput,
-    options?: EphemeralRuntimeHostExecutionOptions,
-  ) => Promise<EphemeralRuntimeHostExecutionResult>;
+    input: HostedExecutionStartInput,
+    options?: HostedExecutionClientOptions,
+  ) => Promise<Exclude<HostedExecutionProjection, { readonly status: 'running' }>>;
   readonly executeExternal?: (input: {
     readonly command: string;
     readonly args: readonly string[];

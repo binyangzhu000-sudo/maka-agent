@@ -68,8 +68,6 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
           return {
             status: 'completed',
             executionId: input.executionId,
-            rootTurnId: input.turnId,
-            rootRunId: 'run',
             usage: USAGE,
             costUsd: 0.01,
             usageComplete: true,

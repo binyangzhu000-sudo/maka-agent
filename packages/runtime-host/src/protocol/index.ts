@@ -38,6 +38,7 @@ export * from './daily-review.js';
 export * from './client-capability.js';
 export * from './configuration-change.js';
 export * from './goal.js';
+export * from './hosted-execution.js';
 export * from './plan.js';
 export * from './execution-inspect.js';
 export * from './external-session.js';

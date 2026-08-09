@@ -1,22 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type {
-  EphemeralRuntimeHostExecutionInput,
-  EphemeralRuntimeHostExecutionResult,
+  HostedExecutionProjection,
+  HostedExecutionStartInput,
 } from '@maka/runtime-host/client';
 import { createMakaSubjectAdapter, type ExperimentCell } from '../index.js';
 
-test('Maka subject executes one ephemeral Session through Runtime Host', async () => {
+test('Maka subject asks Runtime Host to own one Hosted execution', async () => {
   const calls: unknown[] = [];
   const executeMaka = async (
-    input: EphemeralRuntimeHostExecutionInput,
-  ): Promise<EphemeralRuntimeHostExecutionResult> => {
+    input: HostedExecutionStartInput,
+  ): Promise<Exclude<HostedExecutionProjection, { readonly status: 'running' }>> => {
     calls.push(input);
     return {
       status: 'completed',
       executionId: input.executionId,
-      rootTurnId: input.turnId,
-      rootRunId: 'run-1',
       usage: {
         inputTokens: 10,
         outputTokens: 5,
@@ -29,7 +27,7 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
       usageComplete: true,
     };
   };
-  const ids = ['session-1', 'turn-1'];
+  const ids = ['execution-1'];
   const adapter = createMakaSubjectAdapter({
     newId: () => ids.shift()!,
     now: (() => {
@@ -46,8 +44,7 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
 
   assert.deepEqual(calls, [
     {
-      executionId: 'session-1',
-      turnId: 'turn-1',
+      executionId: 'execution-1',
       cwd: '/workspace',
       name: 'maka',
       content: { text: 'Solve it' },
@@ -73,10 +70,8 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
     status: 'completed',
     artifacts: [
       {
-        kind: 'runtime_host_run',
-        sessionId: 'session-1',
-        turnId: 'turn-1',
-        runId: 'run-1',
+        kind: 'runtime_host_execution',
+        executionId: 'execution-1',
         usageComplete: true,
       },
     ],
@@ -85,14 +80,12 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
 
 test('Maka subject preserves Runtime Host failure attribution', async () => {
   const executeMaka = async (
-    input: EphemeralRuntimeHostExecutionInput,
-  ): Promise<EphemeralRuntimeHostExecutionResult> => {
+    input: HostedExecutionStartInput,
+  ): Promise<Exclude<HostedExecutionProjection, { readonly status: 'running' }>> => {
     return {
       status: 'failed',
       failureReason: 'provider failed',
       executionId: input.executionId,
-      rootTurnId: input.turnId,
-      rootRunId: 'run-1',
       usage: {
         inputTokens: 10,
         outputTokens: 5,
@@ -105,7 +98,7 @@ test('Maka subject preserves Runtime Host failure attribution', async () => {
       usageComplete: true,
     };
   };
-  const ids = ['session-1', 'turn-1'];
+  const ids = ['execution-1'];
   const adapter = createMakaSubjectAdapter({
     newId: () => ids.shift()!,
     now: (() => {
@@ -134,10 +127,8 @@ test('Maka subject preserves Runtime Host failure attribution', async () => {
     status: 'failed',
     artifacts: [
       {
-        kind: 'runtime_host_run',
-        sessionId: 'session-1',
-        turnId: 'turn-1',
-        runId: 'run-1',
+        kind: 'runtime_host_execution',
+        executionId: 'execution-1',
         usageComplete: true,
         reason: 'provider failed',
       },
@@ -148,7 +139,7 @@ test('Maka subject preserves Runtime Host failure attribution', async () => {
 test('Maka subject keeps partial usage replaceable when Host settlement is incomplete', async () => {
   const adapter = createMakaSubjectAdapter({
     newId: (() => {
-      const ids = ['session-1', 'turn-1'];
+      const ids = ['execution-1'];
       return () => ids.shift()!;
     })(),
     now: () => 100,
@@ -162,8 +153,6 @@ test('Maka subject keeps partial usage replaceable when Host settlement is incom
       executeMaka: async (input) => ({
         status: 'completed',
         executionId: input.executionId,
-        rootTurnId: input.turnId,
-        rootRunId: 'run-1',
         usage: {
           inputTokens: 10,
           outputTokens: 5,
@@ -183,10 +172,8 @@ test('Maka subject keeps partial usage replaceable when Host settlement is incom
   assert.equal(result.costUsd, 0.1);
   assert.deepEqual(result.artifacts, [
     {
-      kind: 'runtime_host_run',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      runId: 'run-1',
+      kind: 'runtime_host_execution',
+      executionId: 'execution-1',
       usageComplete: false,
     },
   ]);

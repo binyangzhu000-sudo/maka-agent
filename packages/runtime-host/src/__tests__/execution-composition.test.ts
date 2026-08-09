@@ -11,6 +11,7 @@ import type {
 import type { ShellRunRecord } from '@maka/core/shell-run';
 import {
   FAKE_ASK_USER_QUESTION_PROMPT,
+  FakeBackend,
   LOCAL_READ_AGENT_DEFINITION,
   SessionManager,
 } from '@maka/runtime';
@@ -28,6 +29,7 @@ import {
   type InteractiveRootOwner,
 } from '@maka/storage/root-authority';
 import { openInteractiveUsageStoresForWrite } from '@maka/storage/usage-stores';
+import { openInteractiveRuntimePolicyStoresForWrite } from '@maka/storage/runtime-policy-stores';
 import { openInteractiveShellRunStoreForWrite } from '@maka/storage/shell-run-authority';
 import {
   createExecutionRuntimeHostComposition,
@@ -162,6 +164,140 @@ test('production composition commits automatic titles through Host-owned Session
         const summary = (await manager.listSessions()).find((item) => item.id === session.id);
         return summary?.name === 'Host owns this automatic title';
       });
+    } finally {
+      await composition.close();
+    }
+  });
+});
+
+test('production composition owns a Hosted execution through terminal cleanup', async () => {
+  await withCompositionRoot(async ({ root, owner }) => {
+    const policy = await openInteractiveRuntimePolicyStoresForWrite(owner.lease);
+    const created = await policy.connectionCatalog.create({
+      expectedCatalogRevision: 0,
+      connection: {
+        slug: 'hosted-test',
+        name: 'Hosted test',
+        providerType: 'moonshot',
+        baseUrl: 'https://example.invalid/v1',
+        enabled: true,
+        enabledModelIds: ['fake-model'],
+      },
+    });
+    assert.equal(created.kind, 'committed');
+    if (created.kind !== 'committed') return;
+    const connection = created.snapshot.connections[0];
+    assert.ok(connection);
+    if (!connection) return;
+    await policy.credentialVault.set({
+      locator: {
+        scope: 'connection',
+        connectionId: connection.connectionId,
+        kind: 'api_key',
+      },
+      expected: null,
+      secret: 'hosted-test-key',
+    });
+    const prepared = await policy.operations.beginModelFetch(connection.connectionId);
+    assert.equal(prepared.kind, 'ready');
+    if (prepared.kind !== 'ready') return;
+    await policy.operations.completeModelFetch(prepared.ticket, {
+      models: [
+        {
+          id: 'fake-model',
+          capabilities: { chat: true, functionCalling: true },
+          contextWindow: 3072,
+          maxOutputTokens: 64,
+        },
+      ],
+      source: 'fetched',
+      fetchedAt: Date.now(),
+    });
+
+    const composition = await createExecutionRuntimeHostComposition(
+      compositionContext(owner),
+      {},
+      { primaryBackendFactory: (context) => new FakeBackend(context) },
+    );
+    try {
+      await composition.recover();
+      const context = {
+        hostEpoch: 'execution-composition-test',
+        connectionId: 'hosted-client',
+        surface: 'run' as const,
+        principal: 'local_os_user',
+        acquireResidency: () => ({ release() {} }),
+      };
+      const started = await composition.handlers['hosted.execution.start'](
+        {
+          executionId: 'hosted-execution-1',
+          cwd: root,
+          modelTarget: {
+            kind: 'explicit',
+            connectionSlug: 'hosted-test',
+            model: 'fake-model',
+          },
+          content: { text: 'Complete inside Runtime Host' },
+          permissionMode: 'ask',
+          collaborationMode: 'agent',
+          orchestrationMode: 'default',
+        },
+        context,
+      );
+      assert.equal(started.ok, true);
+
+      let terminalStatus: string | undefined;
+      await waitFor(async () => {
+        const queried = await composition.handlers['hosted.execution.query'](
+          { executionId: 'hosted-execution-1' },
+          context,
+        );
+        if (!queried.ok || queried.result.status === 'running') return false;
+        terminalStatus = queried.result.status;
+        return true;
+      }, 10_000);
+      assert.equal(terminalStatus, 'completed');
+      const catalog = await composition.handlers['session.catalog.query'](
+        { kind: 'get', sessionId: 'hosted-execution-1' },
+        context,
+      );
+      assert.equal(catalog.ok && catalog.result.kind === 'session' && catalog.result.session, null);
+
+      const waiting = await composition.handlers['hosted.execution.start'](
+        {
+          executionId: 'hosted-execution-cancelled',
+          cwd: root,
+          modelTarget: {
+            kind: 'explicit',
+            connectionSlug: 'hosted-test',
+            model: 'fake-model',
+          },
+          content: { text: FAKE_ASK_USER_QUESTION_PROMPT },
+          permissionMode: 'ask',
+          collaborationMode: 'agent',
+          orchestrationMode: 'default',
+        },
+        context,
+      );
+      assert.deepEqual(waiting, {
+        ok: true,
+        result: { executionId: 'hosted-execution-cancelled', status: 'running' },
+      });
+      const cancelled = await composition.handlers['hosted.execution.cancel'](
+        { executionId: 'hosted-execution-cancelled' },
+        context,
+      );
+      assert.equal(cancelled.ok && cancelled.result.status, 'cancelled');
+      const cancelledCatalog = await composition.handlers['session.catalog.query'](
+        { kind: 'get', sessionId: 'hosted-execution-cancelled' },
+        context,
+      );
+      assert.equal(
+        cancelledCatalog.ok &&
+          cancelledCatalog.result.kind === 'session' &&
+          cancelledCatalog.result.session,
+        null,
+      );
     } finally {
       await composition.close();
     }

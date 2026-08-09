@@ -522,7 +522,7 @@ describe('Host Automation coordinator', () => {
     });
   });
 
-  test('Session stop removes disposable Automations but preserves durable definitions', async () => {
+  test('Hosted execution stop removes every Automation owned by its transient Session', async () => {
     await withHarness(async (harness) => {
       await harness.coordinator.prepareRecovery();
       await harness.coordinator.recover();
@@ -541,13 +541,50 @@ describe('Host Automation coordinator', () => {
         assert.ok(!('error' in created));
       }
 
-      await harness.coordinator.stopSession('creator-session');
+      await harness.coordinator.stopHostedExecution('creator-session');
 
       const snapshot = await harness.store.read();
       assert.deepEqual(
         snapshot.automations.map((automation) => automation.name),
-        ['workspace schedule'],
+        [],
       );
+    });
+  });
+
+  test('Hosted execution stop settles a running Cron fire owned by the Session', async () => {
+    await withHarness(async (harness) => {
+      await harness.coordinator.prepareRecovery();
+      await harness.coordinator.recover();
+      harness.coordinator.start();
+      const created = await harness.coordinator.create({
+        kind: 'cron',
+        name: 'cell follow-up',
+        prompt: 'Continue later.',
+        sessionId: 'creator-session',
+        schedule: { type: 'interval', seconds: 60 },
+      });
+      assert.ok(!('error' in created));
+      if ('error' in created) return;
+      harness.now = created.nextFireAt ?? assert.fail('Expected a scheduled fire');
+      harness.fireTimer();
+      await waitFor(
+        'Cron fire to enter running state',
+        async () => (await harness.store.read()).pendingFires[0]?.status === 'running',
+      );
+      const fire = (await harness.store.read()).pendingFires[0];
+      assert.ok(fire);
+
+      assert.deepEqual(await harness.coordinator.stopHostedExecution('creator-session'), [
+        fire.targetSessionId,
+      ]);
+      assert.deepEqual(await harness.store.read(), {
+        revision: 4,
+        automations: [],
+        pendingFires: [],
+      });
+      harness.finishRun();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(harness.drainCount, 0);
     });
   });
 

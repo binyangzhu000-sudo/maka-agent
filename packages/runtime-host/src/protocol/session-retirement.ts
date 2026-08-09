@@ -27,15 +27,6 @@ export interface SessionRemoveInput {
   readonly expectedRevision: number;
 }
 
-export interface SessionStopInput {
-  readonly sessionId: string;
-}
-
-export interface SessionStopResult {
-  readonly kind: 'stopped';
-  readonly sessionId: string;
-}
-
 export type SessionRemoveResult =
   | { readonly kind: 'removed'; readonly sessionId: string }
   | {
@@ -45,22 +36,6 @@ export type SessionRemoveResult =
     };
 
 export const SESSION_RETIREMENT_OPERATION_SPECS = {
-  'session.stop': defineOperation<
-    SessionStopInput,
-    SessionStopResult,
-    (typeof LIFECYCLE_ERRORS)[number]
-  >({
-    mode: 'command',
-    availability: 'ready',
-    errors: LIFECYCLE_ERRORS,
-    decodeInput: decodeSessionStopInput,
-    decodeOutput: decodeSessionStopResult,
-    assertOutputForInput: (input, output) => {
-      if (output.sessionId !== input.sessionId) {
-        throw invalidProtocolFrame('Session stop result belongs to another Session');
-      }
-    },
-  }),
   'session.lifecycle.set': defineOperation<
     SessionLifecycleSetInput,
     SessionCatalogItem,
@@ -105,17 +80,6 @@ export const SESSION_RETIREMENT_OPERATION_SPECS = {
     },
   }),
 } as const;
-
-export function decodeSessionStopInput(value: unknown): SessionStopInput {
-  const input = requireExactRecord(value, 'Session stop input', ['sessionId']);
-  return { sessionId: requireEntityId(input.sessionId, 'sessionId') };
-}
-
-export function decodeSessionStopResult(value: unknown): SessionStopResult {
-  const result = requireExactRecord(value, 'Session stop result', ['kind', 'sessionId']);
-  if (result.kind !== 'stopped') throw invalidProtocolFrame('Invalid Session stop result kind');
-  return { kind: 'stopped', sessionId: requireEntityId(result.sessionId, 'sessionId') };
-}
 
 export function decodeSessionLifecycleSetInput(value: unknown): SessionLifecycleSetInput {
   const input = requireExactRecord(value, 'Session lifecycle input', ['sessionId', 'state']);

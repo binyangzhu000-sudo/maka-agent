@@ -31,8 +31,7 @@ export function createMakaSubjectAdapter(
     },
     async execute({ cell, context }): Promise<SubjectExecutionResult> {
       const config = decodeMakaSubjectConfig(cell.subject.config);
-      const sessionId = newId();
-      const turnId = newId();
+      const executionId = newId();
       const startedAt = now();
       try {
         if (!context.executeMaka) {
@@ -40,8 +39,7 @@ export function createMakaSubjectAdapter(
         }
         const result = await context.executeMaka(
           {
-            executionId: sessionId,
-            turnId,
+            executionId,
             cwd: context.cwd,
             name: cell.subject.id,
             modelTarget: {
@@ -74,20 +72,14 @@ export function createMakaSubjectAdapter(
                 ? 'indeterminate'
                 : 'failed',
           artifacts: [
-            runtimeHostRunArtifact(
-              result.executionId,
-              result.rootTurnId,
-              result.rootRunId,
-              result.failureReason,
-              result.usageComplete,
-            ),
+            runtimeHostRunArtifact(result.executionId, result.failureReason, result.usageComplete),
           ],
         };
       } catch (error) {
         return failureResult('indeterminate', now() - startedAt, [
           {
             kind: 'runtime_host_execution',
-            executionId: sessionId,
+            executionId,
             reason: classifyRuntimeHostFailure(error),
           },
         ]);
@@ -165,17 +157,13 @@ function failureResult(
 }
 
 function runtimeHostRunArtifact(
-  sessionId: string,
-  turnId: string,
-  runId: string,
+  executionId: string,
   reason?: string,
   usageComplete = true,
 ): JsonObject {
   return {
-    kind: 'runtime_host_run',
-    sessionId,
-    turnId,
-    runId,
+    kind: 'runtime_host_execution',
+    executionId,
     usageComplete,
     ...(reason ? { reason } : {}),
   };

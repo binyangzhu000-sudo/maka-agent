@@ -94,6 +94,8 @@ import {
 import { HostExecutionInspectCoordinator } from './execution-inspect-coordinator.js';
 import { HostExternalSessionCoordinator } from './external-session-coordinator.js';
 import { HostGoalCoordinator } from './goal-coordinator.js';
+import { HostHostedExecutionCoordinator } from './hosted-execution-coordinator.js';
+import { HostHostedExecutionRunner } from './hosted-execution-runner.js';
 import type { RuntimeHostComposition, RuntimeHostCompositionContext } from './host-kernel.js';
 import { HostInteractionCoordinator } from './interaction-coordinator.js';
 import { migrateLegacyRuntimePolicy } from './legacy-runtime-policy-migration.js';
@@ -498,6 +500,7 @@ export async function createExecutionRuntimeHostComposition(
     let rootRecoveryCompleted = false;
     let closeTask: Promise<void> | undefined;
     let backendInvalidationPoisoned = false;
+    let hostedExecutions: HostHostedExecutionCoordinator | undefined;
     const beginDrain = () => {
       if (draining) return;
       draining = true;
@@ -507,6 +510,7 @@ export async function createExecutionRuntimeHostComposition(
       runtimeResources?.beginDrain();
       automations?.beginDrain();
       dailyReview?.beginDrain();
+      hostedExecutions?.beginDrain();
       messages.beginDrain();
       interactions.beginDrain();
       connectionEffects.beginDrain();
@@ -1114,7 +1118,24 @@ export async function createExecutionRuntimeHostComposition(
       requestDrain: context.requestDrain,
       memoryExtractionLane,
     });
+    const hostedExecutionRunner = new HostHostedExecutionRunner({
+      sessions: sessionCatalog,
+      root: coordinator,
+      retirement: sessionRetirement,
+      usage: usagePricing,
+      context: {
+        hostEpoch: context.hostEpoch,
+        connectionId: 'hosted-execution',
+        surface: 'run',
+        principal: 'runtime_host',
+        acquireResidency: context.acquireResidency,
+      },
+    });
+    hostedExecutions = new HostHostedExecutionCoordinator({
+      run: (input, signal) => hostedExecutionRunner.run(input, signal),
+    });
     const handlers = {
+      ...hostedExecutions.handlers,
       ...coordinator.handlers,
       ...requireGoal(goal).handlers,
       ...sessionCatalog.handlers,
@@ -1191,6 +1212,11 @@ export async function createExecutionRuntimeHostComposition(
         const errors: unknown[] = [];
         try {
           await recover();
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          await hostedExecutions?.close();
         } catch (error) {
           errors.push(error);
         }
