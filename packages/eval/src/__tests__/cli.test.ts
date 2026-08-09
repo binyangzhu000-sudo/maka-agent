@@ -118,15 +118,14 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
   );
 });
 
-test('maka eval public path loads a declared executor and runs a real external subject', async () => {
+test('maka eval public path loads a declared executor capability', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-public-cli-'));
   const specPath = join(root, 'experiment.json');
   const modulePath = join(root, 'executor.mjs');
   const out = join(root, 'out');
-  const evalModuleUrl = new URL('../index.js', import.meta.url).href;
   await writeFile(
     modulePath,
-    `import {createLocalExternalExecution} from ${JSON.stringify(evalModuleUrl)};const executeExternal=createLocalExternalExecution();export function createExecutor(){return{kind:"harbor",async prepare(){return{cwd:process.cwd(),metadata:{},executeExternal}},async verify({subject}){return{score:subject.status==="completed"?1:null,status:subject.status==="completed"?"completed":"subject_failed",artifacts:[]}}}}`,
+    `export function createExecutor(){return{kind:"harbor",async prepare(){return{cwd:process.cwd(),metadata:{},executeExternal:async()=>({exitCode:0,stdout:JSON.stringify({schemaVersion:"maka.external_subject_result.v1",output:"done",usage:{inputTokens:1,outputTokens:1,cacheReadTokens:0,cacheWriteTokens:0,reasoningTokens:0,totalTokens:2},costUsd:0.01,artifacts:[]})})}},async verify({subject}){return{score:subject.status==="completed"?1:null,status:subject.status==="completed"?"completed":"subject_failed",artifacts:[]}}}}`,
   );
   await writeFile(
     specPath,
@@ -143,11 +142,8 @@ test('maka eval public path loads a declared executor and runs a real external s
           id: 'external',
           kind: 'external',
           config: {
-            command: process.execPath,
-            args: [
-              '-e',
-              'process.stdout.write(JSON.stringify({schemaVersion:"maka.external_subject_result.v1",output:"done",usage:{inputTokens:1,outputTokens:1,cacheReadTokens:0,cacheWriteTokens:0,reasoningTokens:0,totalTokens:2},costUsd:0.01,artifacts:[]}))',
-            ],
+            command: 'competitor',
+            args: [],
             environment: [],
           },
         },

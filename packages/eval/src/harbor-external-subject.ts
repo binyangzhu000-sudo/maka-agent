@@ -10,14 +10,7 @@ const exitCode = await new Promise<number>((done, reject) => {
 process.stdout.write(
   JSON.stringify({
     schemaVersion: 'maka.external_subject_result.v1',
-    usage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      reasoningTokens: 0,
-      totalTokens: 0,
-    },
+    usage: null,
     costUsd: null,
     artifacts: [],
   }),

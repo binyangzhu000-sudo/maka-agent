@@ -1,16 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { JsonObject } from './experiment.js';
-import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionResult } from './runner.js';
-
-const EMPTY_USAGE: NormalizedUsage = Object.freeze({
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-  reasoningTokens: 0,
-  totalTokens: 0,
-});
 
 export interface CreateMakaSubjectAdapterInput {
   readonly newId?: () => string;
@@ -148,7 +138,7 @@ function failureResult(
   artifacts: readonly JsonObject[] = [],
 ): SubjectExecutionResult {
   return {
-    usage: EMPTY_USAGE,
+    usage: null,
     costUsd: null,
     durationMs,
     status,

@@ -135,14 +135,17 @@ function decodeCellAttempt(value: unknown, where: string): CellAttempt {
     'status',
     'artifacts',
   ]);
-  const usage = exactObject(result.usage, `${where}.result.usage`, [
-    'inputTokens',
-    'outputTokens',
-    'cacheReadTokens',
-    'cacheWriteTokens',
-    'reasoningTokens',
-    'totalTokens',
-  ]);
+  const usage =
+    result.usage === null
+      ? null
+      : exactObject(result.usage, `${where}.result.usage`, [
+          'inputTokens',
+          'outputTokens',
+          'cacheReadTokens',
+          'cacheWriteTokens',
+          'reasoningTokens',
+          'totalTokens',
+        ]);
   const status = resultStatus(result.status, `${where}.result.status`);
   const artifacts = array(result.artifacts, `${where}.result.artifacts`).map((artifact, index) =>
     object(artifact, `${where}.result.artifacts[${index}]`),
@@ -154,7 +157,7 @@ function decodeCellAttempt(value: unknown, where: string): CellAttempt {
     completedAt: nonnegativeNumber(record.completedAt, `${where}.completedAt`),
     result: {
       score: nullableFiniteNumber(result.score, `${where}.result.score`),
-      usage: decodeUsage(usage, `${where}.result.usage`),
+      usage: usage === null ? null : decodeUsage(usage, `${where}.result.usage`),
       costUsd: nullableNonnegativeNumber(result.costUsd, `${where}.result.costUsd`),
       durationMs: nonnegativeNumber(result.durationMs, `${where}.result.durationMs`),
       status,
@@ -244,8 +247,4 @@ function nullableFiniteNumber(value: unknown, where: string): number | null {
 function nullableNonnegativeNumber(value: unknown, where: string): number | null {
   if (value === null) return null;
   return nonnegativeNumber(value, where);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

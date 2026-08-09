@@ -168,6 +168,7 @@ test('Maka subject keeps partial usage replaceable when Host settlement is incom
   });
 
   assert.equal(result.status, 'indeterminate');
+  assert.ok(result.usage);
   assert.equal(result.usage.totalTokens, 15);
   assert.equal(result.costUsd, 0.1);
   assert.deepEqual(result.artifacts, [

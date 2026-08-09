@@ -13,7 +13,7 @@ export type EvalResultStatus = 'completed' | 'subject_failed' | 'infra_failed' |
 
 export interface EvalResult {
   readonly score: number | null;
-  readonly usage: NormalizedUsage;
+  readonly usage: NormalizedUsage | null;
   readonly costUsd: number | null;
   readonly durationMs: number;
   readonly status: EvalResultStatus;

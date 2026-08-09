@@ -35,10 +35,7 @@ export {
   createMakaSubjectAdapter,
   type CreateMakaSubjectAdapterInput,
 } from './runtime-host-subject.js';
-export {
-  createExternalSubjectAdapter,
-  createLocalExternalExecution,
-} from './external-subject.js';
+export { createExternalSubjectAdapter } from './external-subject.js';
 export {
   openExperimentDirectory,
   type ExperimentDirectory,

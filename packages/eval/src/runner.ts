@@ -18,7 +18,7 @@ import type {
 
 export interface SubjectExecutionResult {
   readonly output?: string;
-  readonly usage: NormalizedUsage;
+  readonly usage: NormalizedUsage | null;
   readonly costUsd: number | null;
   readonly durationMs: number;
   readonly status: Exclude<EvalResult['status'], 'subject_failed'> | 'failed';
@@ -151,15 +151,6 @@ async function runExperimentExclusive(input: RunExperimentInput): Promise<Experi
   return { results, replaceableCellIds };
 }
 
-const EMPTY_USAGE: NormalizedUsage = Object.freeze({
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-  reasoningTokens: 0,
-  totalTokens: 0,
-});
-
 async function executeCell(
   executor: ExperimentExecutor,
   subjectAdapter: SubjectAdapter,
@@ -242,7 +233,7 @@ function failedResult(
 ): EvalResult {
   return {
     score: null,
-    usage: EMPTY_USAGE,
+    usage: null,
     costUsd: null,
     durationMs: 0,
     status,

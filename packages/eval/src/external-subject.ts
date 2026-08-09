@@ -1,17 +1,6 @@
-import { spawn } from 'node:child_process';
 import type { JsonObject } from './experiment.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionResult } from './runner.js';
-
-const MAX_OUTPUT_BYTES = 1024 * 1024;
-const EMPTY_USAGE: NormalizedUsage = Object.freeze({
-  inputTokens: 0,
-  outputTokens: 0,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
-  reasoningTokens: 0,
-  totalTokens: 0,
-});
 
 export function createExternalSubjectAdapter(options?: {
   readonly now?: () => number;
@@ -47,7 +36,7 @@ export function createExternalSubjectAdapter(options?: {
         const durationMs = now() - startedAt;
         if (processResult.exitCode !== 0) {
           return {
-            usage: EMPTY_USAGE,
+            usage: null,
             costUsd: null,
             durationMs,
             status: context.signal?.aborted ? 'indeterminate' : 'failed',
@@ -71,7 +60,7 @@ export function createExternalSubjectAdapter(options?: {
         };
       } catch (error) {
         return {
-          usage: EMPTY_USAGE,
+          usage: null,
           costUsd: null,
           durationMs: now() - startedAt,
           status: context.signal?.aborted ? 'indeterminate' : 'infra_failed',
@@ -95,7 +84,7 @@ interface ExternalSubjectConfig {
 
 interface ExternalSubjectProtocolResult {
   readonly output?: string;
-  readonly usage: NormalizedUsage;
+  readonly usage: NormalizedUsage | null;
   readonly costUsd: number | null;
   readonly artifacts: readonly JsonObject[];
 }
@@ -119,22 +108,7 @@ function decodeExternalSubjectResult(stdout: string): ExternalSubjectProtocolRes
   if (record.output !== undefined && typeof record.output !== 'string') {
     throw new Error('external subject result.output must be a string');
   }
-  const usage = exactRecord(record.usage, 'external subject result.usage', [
-    'inputTokens',
-    'outputTokens',
-    'cacheReadTokens',
-    'cacheWriteTokens',
-    'reasoningTokens',
-    'totalTokens',
-  ]);
-  const decodedUsage = {
-    inputTokens: nonnegativeNumber(usage.inputTokens, 'usage.inputTokens'),
-    outputTokens: nonnegativeNumber(usage.outputTokens, 'usage.outputTokens'),
-    cacheReadTokens: nonnegativeNumber(usage.cacheReadTokens, 'usage.cacheReadTokens'),
-    cacheWriteTokens: nonnegativeNumber(usage.cacheWriteTokens, 'usage.cacheWriteTokens'),
-    reasoningTokens: nonnegativeNumber(usage.reasoningTokens, 'usage.reasoningTokens'),
-    totalTokens: nonnegativeNumber(usage.totalTokens, 'usage.totalTokens'),
-  };
+  const decodedUsage = record.usage === null ? null : decodeUsage(record.usage);
   const costUsd =
     record.costUsd === null ? null : nonnegativeNumber(record.costUsd, 'result.costUsd');
   if (!Array.isArray(record.artifacts) || !record.artifacts.every(isJsonObject)) {
@@ -145,6 +119,25 @@ function decodeExternalSubjectResult(stdout: string): ExternalSubjectProtocolRes
     usage: decodedUsage,
     costUsd,
     artifacts: record.artifacts,
+  };
+}
+
+function decodeUsage(value: unknown): NormalizedUsage {
+  const usage = exactRecord(value, 'external subject result.usage', [
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'reasoningTokens',
+    'totalTokens',
+  ]);
+  return {
+    inputTokens: nonnegativeNumber(usage.inputTokens, 'usage.inputTokens'),
+    outputTokens: nonnegativeNumber(usage.outputTokens, 'usage.outputTokens'),
+    cacheReadTokens: nonnegativeNumber(usage.cacheReadTokens, 'usage.cacheReadTokens'),
+    cacheWriteTokens: nonnegativeNumber(usage.cacheWriteTokens, 'usage.cacheWriteTokens'),
+    reasoningTokens: nonnegativeNumber(usage.reasoningTokens, 'usage.reasoningTokens'),
+    totalTokens: nonnegativeNumber(usage.totalTokens, 'usage.totalTokens'),
   };
 }
 
@@ -187,97 +180,6 @@ function expandArgument(
     .replaceAll('{{repetition}}', replacements.repetition);
 }
 
-export function createLocalExternalExecution(sourceEnvironment: NodeJS.ProcessEnv = process.env) {
-  return (input: {
-    command: string;
-    args: readonly string[];
-    cwd: string;
-    environment: readonly string[];
-    signal?: AbortSignal;
-  }): Promise<{ exitCode: number; stdout: string }> => {
-    const environment: NodeJS.ProcessEnv = {};
-    for (const name of input.environment) {
-      const value = sourceEnvironment[name];
-      if (value !== undefined) environment[name] = value;
-    }
-    return runProcess({ ...input, env: environment });
-  };
-}
-
-function runProcess(input: {
-  command: string;
-  args: readonly string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
-}): Promise<{ exitCode: number; stdout: string }> {
-  if (input.signal?.aborted) return Promise.reject(new Error('external subject was cancelled'));
-  return new Promise((resolve, reject) => {
-    const child = spawn(input.command, input.args, {
-      cwd: input.cwd,
-      env: input.env,
-      detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let outputBytes = 0;
-    let settled = false;
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      void killProcessTree(child.pid).then(
-        () => reject(error),
-        () => reject(error),
-      );
-    };
-    const capture = (target: Buffer[]) => (chunk: Buffer) => {
-      outputBytes += chunk.byteLength;
-      if (outputBytes > MAX_OUTPUT_BYTES) {
-        fail(new Error(`external subject output exceeded ${MAX_OUTPUT_BYTES} bytes`));
-        return;
-      }
-      target.push(chunk);
-    };
-    child.stdout.on('data', capture(stdout));
-    child.stderr.on('data', capture(stderr));
-    const abort = () => fail(new Error('external subject was cancelled'));
-    input.signal?.addEventListener('abort', abort, { once: true });
-    if (input.signal?.aborted) abort();
-    child.once('error', fail);
-    child.once('close', (code, signal) => {
-      input.signal?.removeEventListener('abort', abort);
-      if (settled) return;
-      settled = true;
-      if (code === null) {
-        reject(new Error(`external subject terminated by ${signal ?? 'unknown signal'}`));
-        return;
-      }
-      resolve({
-        exitCode: code,
-        stdout: Buffer.concat(stdout).toString('utf8'),
-      });
-    });
-  });
-}
-
-function killProcessTree(pid: number | undefined): Promise<void> {
-  if (pid === undefined) return Promise.resolve();
-  if (process.platform === 'win32') {
-    return new Promise((resolve) => {
-      const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
-      killer.once('error', () => resolve());
-      killer.once('close', () => resolve());
-    });
-  }
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch {
-    // The process may have exited between the failing read and the signal.
-  }
-  return Promise.resolve();
-}
-
 function exactRecord(
   value: unknown,
   where: string,
@@ -312,7 +214,6 @@ function isJsonObject(value: unknown): value is JsonObject {
 function classifyProcessFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message === 'external subject returned invalid JSON') return 'invalid_result';
-  if (message.includes('output exceeded')) return 'output_limit';
   if (message.includes('result.')) return 'invalid_result';
   return 'launch_failed';
 }
