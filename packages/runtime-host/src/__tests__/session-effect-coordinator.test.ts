@@ -184,8 +184,9 @@ test('Session effect leaves Turn admission free and drain aborts accepted recap 
   );
 });
 
-test('Automatic title generation fences retirement until the effect settles', async () => {
+test('Session stop aborts an active title effect without draining the Host', async () => {
   const started = gate();
+  let calls = 0;
   await withHarness(
     async ({ coordinator }) => {
       const pending = coordinator.generateTitle({
@@ -197,12 +198,21 @@ test('Automatic title generation fences retirement until the effect settles', as
       assert.equal(coordinator.hasLiveSessionState('session-1'), true);
       assert.equal(coordinator.hasLiveSessionState('session-2'), false);
 
-      coordinator.beginDrain();
+      await coordinator.stopSession('session-1');
       assert.equal(await pending, undefined);
       assert.equal(coordinator.hasLiveSessionState('session-1'), false);
+
+      const next = await coordinator.generateTitle({
+        sessionId: 'session-2',
+        header: { id: 'session-2' } as SessionHeader,
+        sourceText: 'A later user message',
+      });
+      assert.equal(next, undefined);
     },
     {
       generateTitle: async ({ abortSignal }) => {
+        calls += 1;
+        if (calls > 1) return undefined;
         started.release();
         await new Promise<void>((resolve) =>
           abortSignal.addEventListener('abort', () => resolve(), { once: true }),

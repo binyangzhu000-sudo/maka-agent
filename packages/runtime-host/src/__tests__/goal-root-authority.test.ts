@@ -157,6 +157,42 @@ test('queued Goal control revokes a prepared root before durable admission', asy
   }
 });
 
+test('Session stop revokes a prepared Goal root before it becomes active', async () => {
+  const fixture = await createFixture();
+  try {
+    const created = fixture.goal.manager.create(fixture.sessionId, 'Stop before admission').goal;
+    const controlLease = fixture.goal.manager.getControlLease(fixture.sessionId);
+    assert.ok(controlLease);
+    if (!controlLease) return;
+    const admission = fixture.coordinator.admitGoalTurn(
+      fixture.sessionId,
+      goalCheckpoint(created),
+      controlLease,
+      'Must not start',
+    );
+    assert.equal(admission.kind, 'prepared');
+    if (admission.kind !== 'prepared') return;
+
+    await fixture.coordinator.stopSession(fixture.sessionId, {
+      source: 'stop_button',
+      mode: 'immediate',
+    });
+
+    assert.deepEqual(fixture.coordinator.readRootState(fixture.sessionId), { kind: 'idle' });
+    assert.deepEqual(await admission.start(), {
+      kind: 'errored',
+      turnId: admission.turnId,
+      reason: 'Goal continuation reservation was revoked.',
+    });
+    assert.equal(
+      await fixture.stores.agentRunStore.readRootTurnAdmission(fixture.sessionId, admission.turnId),
+      undefined,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('Goal continuation cannot overtake a pending Automation admission', async () => {
   const fixture = await createFixture();
   const admissionEntered = deferred();

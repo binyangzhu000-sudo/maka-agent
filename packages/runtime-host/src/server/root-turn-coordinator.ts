@@ -1469,6 +1469,18 @@ export class RootTurnCoordinator {
     } = {},
   ): Promise<void> {
     return this.runCommand(async () => {
+      for (;;) {
+        const reservation = this.#reservationsBySession.get(sessionId);
+        if (!reservation) break;
+        if (
+          reservation.kind === 'parked_continuation' ||
+          reservation.admissionPhase === 'prepared'
+        ) {
+          this.releaseRootReservation(reservation);
+          continue;
+        }
+        await reservation.admissionSettled.promise;
+      }
       const declared = await this.sessionAdmission.run(sessionId, (lease) => {
         const active = this.#activeBySession.get(sessionId);
         if (!active) return undefined;

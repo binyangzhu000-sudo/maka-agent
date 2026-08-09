@@ -66,6 +66,7 @@ type RetirementResources = Pick<
 >;
 type RetirementSessionEffects = {
   hasLiveSessionState(sessionId: string): boolean;
+  stopSession(sessionId: string): Promise<void>;
 };
 type RetirementGraph = {
   hasLiveSessionState(sessionId: string): Promise<boolean>;
@@ -157,6 +158,7 @@ export class HostSessionRetirementCoordinator {
           this.#root.stopSession(sessionId, { source: 'stop_button', mode: 'immediate' }),
         ),
       );
+      await Promise.all(sessionIds.map((sessionId) => this.#sessionEffects.stopSession(sessionId)));
       await Promise.all(sessionIds.map((sessionId) => this.#resources.stopSession(sessionId)));
       await Promise.all(sessionIds.map((sessionId) => this.#automation.stopSession(sessionId)));
       return { ok: true, result: { kind: 'stopped', sessionId: input.sessionId } };

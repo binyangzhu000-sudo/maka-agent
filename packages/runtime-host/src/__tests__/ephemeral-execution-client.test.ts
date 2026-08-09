@@ -118,6 +118,47 @@ test('pre-cancelled ephemeral execution has no Runtime Host side effects', async
   assert.deepEqual(operations, []);
 });
 
+test('cancellation during Session creation retires without starting a Turn', async () => {
+  const operations: string[] = [];
+  const controller = new AbortController();
+  let starts = 0;
+  const connection = connectionStub({
+    operations,
+    request(operation) {
+      if (operation === 'session.create') {
+        controller.abort();
+        return {};
+      }
+      if (operation === 'session.stop') return { kind: 'stopped', sessionId: 'execution-1' };
+      if (operation === 'session.catalog.query') {
+        return { kind: 'session', session: { revision: 1 } };
+      }
+      if (operation === 'session.remove') {
+        return { kind: 'removed', sessionId: 'execution-1' };
+      }
+    },
+    startTurn: async () => {
+      starts += 1;
+      throw new Error('Turn must not start');
+    },
+  });
+
+  await assert.rejects(
+    executeEphemeralRuntimeHostSession(connection, executionInput(), {
+      signal: controller.signal,
+      pollIntervalMs: 0,
+    }),
+    { name: 'AbortError' },
+  );
+  assert.equal(starts, 0);
+  assert.deepEqual(operations, [
+    'session.create',
+    'session.stop',
+    'session.catalog.query',
+    'session.remove',
+  ]);
+});
+
 test('ephemeral execution reports incomplete usage provenance without discarding visible usage', async () => {
   const connection = connectionStub({
     operations: [],

@@ -829,7 +829,6 @@ async function withHarness(
           blockers.root.delete(sessionId);
           blockers.message.delete(sessionId);
           blockers.interaction.delete(sessionId);
-          blockers.effect.delete(sessionId);
         },
         readRootState: (sessionId) =>
           blockers.root.has(sessionId)
@@ -868,6 +867,9 @@ async function withHarness(
       },
       sessionEffects: {
         hasLiveSessionState: (sessionId) => blockers.effect.has(sessionId),
+        stopSession: async (sessionId) => {
+          blockers.effect.delete(sessionId);
+        },
       },
       graph: {
         hasLiveSessionState: async (sessionId) => blockers.graph.has(sessionId),

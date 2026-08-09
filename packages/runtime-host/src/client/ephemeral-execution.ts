@@ -70,6 +70,18 @@ export async function executeEphemeralRuntimeHostSession(
 
   options.signal?.throwIfAborted();
   await createOrReconcile(connection, { ...session, sessionId }, timeout);
+  if (options.signal?.aborted) {
+    await requestStop();
+    await retireWhenQuiescent(
+      connection,
+      sessionId,
+      timeout,
+      pollInterval,
+      options.signal,
+      requestStop,
+    );
+    options.signal.throwIfAborted();
+  }
   try {
     const started = await startOrReconcile(
       connection,

@@ -69,8 +69,9 @@ export class HostSessionEffectCoordinator {
   readonly #acquireResidency: () => OperationResidency;
   readonly #requestDrain: () => void;
   readonly #active = new Set<Promise<void>>();
+  readonly #activeBySession = new Map<string, Set<Promise<void>>>();
   readonly #titleAborts = new Map<AbortController, string>();
-  readonly #recapAborts = new Set<AbortController>();
+  readonly #recapAborts = new Map<AbortController, string>();
   readonly #recaps = new Map<string, ActiveRecapEffect>();
   #accepting = true;
   #closeTask: Promise<void> | undefined;
@@ -96,6 +97,7 @@ export class HostSessionEffectCoordinator {
     const abort = new AbortController();
     this.#titleAborts.set(abort, input.sessionId);
     return this.#track(
+      input.sessionId,
       this.#model.generateTitle({ ...input, abortSignal: abort.signal }).finally(() => {
         this.#titleAborts.delete(abort);
         residency.release();
@@ -113,12 +115,23 @@ export class HostSessionEffectCoordinator {
     return false;
   }
 
+  async stopSession(sessionId: string): Promise<void> {
+    const reason = new DOMException('Session stopped', 'AbortError');
+    for (const [abort, ownerSessionId] of this.#titleAborts) {
+      if (ownerSessionId === sessionId) abort.abort(reason);
+    }
+    for (const [abort, ownerSessionId] of this.#recapAborts) {
+      if (ownerSessionId === sessionId) abort.abort(reason);
+    }
+    await Promise.all([...(this.#activeBySession.get(sessionId) ?? [])]);
+  }
+
   beginDrain(): void {
     if (!this.#accepting) return;
     this.#accepting = false;
     const reason = new DOMException('Runtime Host is draining', 'AbortError');
     for (const abort of this.#titleAborts.keys()) abort.abort(reason);
-    for (const abort of this.#recapAborts) abort.abort(reason);
+    for (const abort of this.#recapAborts.keys()) abort.abort(reason);
   }
 
   close(): Promise<void> {
@@ -136,7 +149,7 @@ export class HostSessionEffectCoordinator {
       return Promise.resolve(recapFailure('host_draining', 'Runtime Host is draining'));
     const residency = context.acquireResidency();
     const abort = new AbortController();
-    this.#recapAborts.add(abort);
+    this.#recapAborts.set(abort, input.sessionId);
     const operation = this.#sessionAdmission
       .run(input.sessionId, () => this.#admitRecap(input, abort))
       .then((admission) => (admission.kind === 'settled' ? admission.outcome : admission.task))
@@ -144,7 +157,7 @@ export class HostSessionEffectCoordinator {
         this.#recapAborts.delete(abort);
         residency.release();
       });
-    return this.#track(operation);
+    return this.#track(input.sessionId, operation);
   }
 
   async #admitRecap(
@@ -362,13 +375,20 @@ export class HostSessionEffectCoordinator {
     return value as Record<string, unknown>;
   }
 
-  #track<T>(task: Promise<T>): Promise<T> {
+  #track<T>(sessionId: string, task: Promise<T>): Promise<T> {
     const settled = task.then(
       () => undefined,
       () => undefined,
     );
     this.#active.add(settled);
-    void settled.finally(() => this.#active.delete(settled));
+    const session = this.#activeBySession.get(sessionId) ?? new Set<Promise<void>>();
+    session.add(settled);
+    this.#activeBySession.set(sessionId, session);
+    void settled.finally(() => {
+      this.#active.delete(settled);
+      session.delete(settled);
+      if (session.size === 0) this.#activeBySession.delete(sessionId);
+    });
     return task;
   }
 }
