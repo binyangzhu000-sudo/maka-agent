@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { RuntimeHostConnection } from '@maka/runtime-host/client';
 import type {
-  SessionCreateInput,
-  TurnQueryInput,
-  TurnStartInput,
-  TurnStopInput,
-} from '@maka/runtime-host/protocol';
+  EphemeralRuntimeHostExecutionInput,
+  EphemeralRuntimeHostExecutionOptions,
+  EphemeralRuntimeHostExecutionResult,
+  RuntimeHostConnection,
+} from '@maka/runtime-host/client';
+import { executeEphemeralRuntimeHostSession } from '@maka/runtime-host/client';
 import type { JsonObject } from './experiment.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionResult } from './runner.js';
@@ -20,30 +20,10 @@ const EMPTY_USAGE: NormalizedUsage = Object.freeze({
 });
 
 export interface MakaRuntimeHostClient {
-  createSession(input: SessionCreateInput): Promise<void>;
-  startTurn(
-    input: TurnStartInput,
-  ): Promise<{ readonly kind: 'started'; readonly runId: string } | { readonly kind: 'blocked' }>;
-  queryTurn(input: TurnQueryInput): Promise<{
-    readonly status:
-      | 'admitted'
-      | 'created'
-      | 'running'
-      | 'waiting_for_user'
-      | 'completed'
-      | 'failed'
-      | 'cancelled';
-    readonly runId: string;
-    readonly failureReason?: string;
-  }>;
-  stopTurn(input: TurnStopInput): Promise<void>;
-  readUsage(input: {
-    readonly sessionId: string;
-    readonly turnId: string;
-    readonly from: number;
-    readonly to: number;
-  }): Promise<{ readonly usage: NormalizedUsage; readonly costUsd: number | null }>;
-  removeSession(sessionId: string): Promise<void>;
+  execute(
+    input: EphemeralRuntimeHostExecutionInput,
+    options?: EphemeralRuntimeHostExecutionOptions,
+  ): Promise<EphemeralRuntimeHostExecutionResult>;
 }
 
 export interface CreateMakaSubjectAdapterInput {
@@ -64,84 +44,45 @@ export function createMakaSubjectAdapter(input: CreateMakaSubjectAdapterInput): 
       const sessionId = newId();
       const turnId = newId();
       const startedAt = now();
-      let sessionCreated = false;
-      let runId: string | undefined;
-      let result: SubjectExecutionResult;
       try {
-        await input.client.createSession({
-          sessionId,
-          cwd: context.cwd,
-          name: cell.subject.id,
-          modelTarget: {
-            kind: 'explicit',
-            connectionSlug: config.connectionSlug,
-            model: config.model,
-          },
-          permissionMode: config.permissionMode,
-          collaborationMode: config.collaborationMode,
-          orchestrationMode: config.orchestrationMode,
-          ...(config.thinkingLevel === null ? {} : { thinkingLevel: config.thinkingLevel }),
-        });
-        sessionCreated = true;
-        const started = await input.client.startTurn({
-          sessionId,
-          turnId,
-          content: { text: cell.task.input },
-          maxSteps: config.maxSteps,
-        });
-        if (started.kind === 'blocked') {
-          result = failureResult('failed', 'Runtime Host blocked the Turn', now() - startedAt);
-        } else {
-          runId = started.runId;
-          const terminal = await waitForTerminalTurn({
-            client: input.client,
-            sessionId,
+        const result = await input.client.execute(
+          {
+            executionId: sessionId,
             turnId,
-            runId,
+            cwd: context.cwd,
+            name: cell.subject.id,
+            modelTarget: {
+              kind: 'explicit',
+              connectionSlug: config.connectionSlug,
+              model: config.model,
+            },
+            permissionMode: config.permissionMode,
+            collaborationMode: config.collaborationMode,
+            orchestrationMode: config.orchestrationMode,
+            ...(config.thinkingLevel === null ? {} : { thinkingLevel: config.thinkingLevel }),
+            content: { text: cell.task.input },
+            maxSteps: config.maxSteps,
+          },
+          {
             signal: context.signal,
             pollIntervalMs,
-          });
-          const completedAt = now();
-          const usage = await input.client.readUsage({
-            sessionId,
-            turnId,
-            from: startedAt,
-            to: completedAt,
-          });
-          result = {
-            usage: usage.usage,
-            costUsd: usage.costUsd,
-            durationMs: completedAt - startedAt,
-            status: terminal.status === 'completed' ? 'completed' : 'failed',
-            ...(terminal.status === 'completed'
-              ? {}
-              : {
-                  failureReason: terminal.failureReason ?? `Runtime Host Turn ${terminal.status}`,
-                }),
-            artifacts: [runtimeHostRunArtifact(sessionId, turnId, terminal.runId)],
-          };
-        }
-      } catch (error) {
-        result = failureResult(
-          runId ? 'indeterminate' : 'infra_failed',
-          errorMessage(error),
-          now() - startedAt,
-          runId ? [runtimeHostRunArtifact(sessionId, turnId, runId)] : [],
+          },
         );
+        return {
+          usage: result.usage,
+          costUsd: result.costUsd,
+          durationMs: now() - startedAt,
+          status: result.status === 'completed' ? 'completed' : 'failed',
+          ...(result.failureReason ? { failureReason: result.failureReason } : {}),
+          artifacts: [
+            runtimeHostRunArtifact(result.executionId, result.rootTurnId, result.rootRunId),
+          ],
+        };
+      } catch (error) {
+        return failureResult('indeterminate', errorMessage(error), now() - startedAt, [
+          { kind: 'runtime_host_execution', executionId: sessionId },
+        ]);
       }
-
-      if (sessionCreated) {
-        try {
-          await input.client.removeSession(sessionId);
-        } catch (error) {
-          return {
-            ...result,
-            status: 'indeterminate',
-            failureReason: `Runtime Host Session cleanup failed: ${errorMessage(error)}`,
-          };
-        }
-      }
-      return result;
     },
   };
 }
@@ -150,32 +91,7 @@ export function createMakaRuntimeHostClient(
   connection: RuntimeHostConnection,
 ): MakaRuntimeHostClient {
   return {
-    async createSession(input) {
-      await connection.request('session.create', input);
-    },
-    async startTurn(input) {
-      const result = await connection.startTurn(input);
-      return result.kind === 'blocked'
-        ? { kind: 'blocked' }
-        : { kind: 'started', runId: result.turn.runId };
-    },
-    async queryTurn(input) {
-      const turn = await connection.queryTurn(input);
-      return {
-        status: turn.status,
-        runId: turn.runId,
-        ...(turn.status === 'failed'
-          ? { failureReason: turn.failureClass }
-          : turn.status === 'cancelled'
-            ? { failureReason: turn.abortSource }
-            : {}),
-      };
-    },
-    async stopTurn(input) {
-      await connection.stopTurn(input);
-    },
-    readUsage: (input) => readTurnUsage(connection, input),
-    removeSession: (sessionId) => removeRuntimeHostSession(connection, sessionId),
+    execute: (input, options) => executeEphemeralRuntimeHostSession(connection, input, options),
   };
 }
 
@@ -233,93 +149,6 @@ function decodeMakaSubjectConfig(config: JsonObject): MakaSubjectConfig {
   return config as unknown as MakaSubjectConfig;
 }
 
-async function waitForTerminalTurn(input: {
-  readonly client: MakaRuntimeHostClient;
-  readonly sessionId: string;
-  readonly turnId: string;
-  readonly runId: string;
-  readonly signal?: AbortSignal;
-  readonly pollIntervalMs: number;
-}): Promise<Awaited<ReturnType<MakaRuntimeHostClient['queryTurn']>>> {
-  for (;;) {
-    if (input.signal?.aborted) {
-      await input.client.stopTurn({
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        runId: input.runId,
-      });
-    }
-    const turn = await input.client.queryTurn({
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-    });
-    if (turn.status === 'completed' || turn.status === 'failed' || turn.status === 'cancelled') {
-      return turn;
-    }
-    await delay(input.pollIntervalMs);
-  }
-}
-
-async function readTurnUsage(
-  connection: RuntimeHostConnection,
-  input: { sessionId: string; turnId: string; from: number; to: number },
-): Promise<{ usage: NormalizedUsage; costUsd: number | null }> {
-  const rows = [];
-  let offset = 0;
-  for (;;) {
-    const page = await connection.request('usage.query', {
-      kind: 'logs',
-      source: 'llm',
-      query: { range: { from: input.from, to: input.to }, status: 'all' },
-      offset,
-      limit: 100,
-    });
-    if (page.kind !== 'logs' || page.source !== 'llm') {
-      throw new Error('Runtime Host returned a non-LLM usage page');
-    }
-    rows.push(
-      ...page.rows.filter(
-        (row) => row.sessionId === input.sessionId && row.turnId === input.turnId,
-      ),
-    );
-    if (page.nextOffset === null) break;
-    offset = page.nextOffset;
-  }
-  const usage = rows.reduce<NormalizedUsage>(
-    (total, row) => ({
-      inputTokens: total.inputTokens + row.inputTokens,
-      outputTokens: total.outputTokens + row.outputTokens,
-      cacheReadTokens: total.cacheReadTokens + row.cacheReadTokens,
-      cacheWriteTokens: total.cacheWriteTokens + row.cacheWriteTokens,
-      reasoningTokens: total.reasoningTokens + row.reasoningTokens,
-      totalTokens: total.totalTokens + row.totalTokens,
-    }),
-    EMPTY_USAGE,
-  );
-  const costUsd =
-    rows.length === 0 || rows.some((row) => row.costUsd === undefined)
-      ? null
-      : rows.reduce((total, row) => total + (row.costUsd ?? 0), 0);
-  return { usage, costUsd };
-}
-
-async function removeRuntimeHostSession(
-  connection: RuntimeHostConnection,
-  sessionId: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const queried = await connection.request('session.catalog.query', { kind: 'get', sessionId });
-    if (queried.kind !== 'session') throw new Error('Runtime Host Session lookup changed revision');
-    if (!queried.session) return;
-    const removed = await connection.request('session.remove', {
-      sessionId,
-      expectedRevision: queried.session.revision,
-    });
-    if (removed.kind === 'removed') return;
-  }
-  throw new Error(`Runtime Host Session kept changing during removal: ${sessionId}`);
-}
-
 function failureResult(
   status: 'failed' | 'infra_failed' | 'indeterminate',
   failureReason: string,
@@ -338,10 +167,6 @@ function failureResult(
 
 function runtimeHostRunArtifact(sessionId: string, turnId: string, runId: string): JsonObject {
   return { kind: 'runtime_host_run', sessionId, turnId, runId };
-}
-
-function delay(ms: number): Promise<void> {
-  return ms === 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function errorMessage(error: unknown): string {

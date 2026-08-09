@@ -76,20 +76,17 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
     },
   });
   const client: MakaRuntimeHostClient = {
-    async createSession(input) {
+    async execute(input) {
       sessions.push({ name: input.name, orchestrationMode: input.orchestrationMode });
+      return {
+        status: 'completed',
+        executionId: input.executionId,
+        rootTurnId: input.turnId,
+        rootRunId: 'run',
+        usage: USAGE,
+        costUsd: 0.01,
+      };
     },
-    async startTurn() {
-      return { kind: 'started', runId: 'run' };
-    },
-    async queryTurn() {
-      return { status: 'completed', runId: 'run' };
-    },
-    async stopTurn() {},
-    async readUsage() {
-      return { usage: USAGE, costUsd: 0.01 };
-    },
-    async removeSession() {},
   };
 
   const code = await runMakaEvalCli(

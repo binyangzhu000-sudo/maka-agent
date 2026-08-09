@@ -7,22 +7,15 @@ import {
 } from '../index.js';
 
 test('Maka subject executes one ephemeral Session through Runtime Host', async () => {
-  const calls: string[] = [];
+  const calls: unknown[] = [];
   const client: MakaRuntimeHostClient = {
-    async createSession(input) {
-      calls.push(`create:${input.sessionId}:${input.cwd}`);
-    },
-    async startTurn(input) {
-      calls.push(`start:${input.sessionId}:${input.turnId}:${input.content.text}`);
-      return { kind: 'started', runId: 'run-1' };
-    },
-    async queryTurn(input) {
-      calls.push(`query:${input.sessionId}:${input.turnId}`);
-      return { status: 'completed', runId: 'run-1' };
-    },
-    async readUsage(input) {
-      calls.push(`usage:${input.sessionId}:${input.turnId}`);
+    async execute(input) {
+      calls.push(input);
       return {
+        status: 'completed',
+        executionId: input.executionId,
+        rootTurnId: input.turnId,
+        rootRunId: 'run-1',
         usage: {
           inputTokens: 10,
           outputTokens: 5,
@@ -33,12 +26,6 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
         },
         costUsd: 0.02,
       };
-    },
-    async removeSession(sessionId) {
-      calls.push(`remove:${sessionId}`);
-    },
-    async stopTurn() {
-      throw new Error('unexpected stop');
     },
   };
   const ids = ['session-1', 'turn-1'];
@@ -58,11 +45,19 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
   });
 
   assert.deepEqual(calls, [
-    'create:session-1:/workspace',
-    'start:session-1:turn-1:Solve it',
-    'query:session-1:turn-1',
-    'usage:session-1:turn-1',
-    'remove:session-1',
+    {
+      executionId: 'session-1',
+      turnId: 'turn-1',
+      cwd: '/workspace',
+      name: 'maka',
+      content: { text: 'Solve it' },
+      modelTarget: { kind: 'explicit', connectionSlug: 'connection', model: 'model' },
+      thinkingLevel: 'high',
+      permissionMode: 'bypass',
+      collaborationMode: 'agent',
+      orchestrationMode: 'default',
+      maxSteps: 100,
+    },
   ]);
   assert.deepEqual(result, {
     usage: {
@@ -87,17 +82,15 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
   });
 });
 
-test('Maka subject preserves attributable usage when Session cleanup is indeterminate', async () => {
+test('Maka subject preserves Runtime Host failure attribution', async () => {
   const client: MakaRuntimeHostClient = {
-    async createSession() {},
-    async startTurn() {
-      return { kind: 'started', runId: 'run-1' };
-    },
-    async queryTurn() {
-      return { status: 'completed', runId: 'run-1' };
-    },
-    async readUsage() {
+    async execute(input) {
       return {
+        status: 'failed',
+        failureReason: 'provider failed',
+        executionId: input.executionId,
+        rootTurnId: input.turnId,
+        rootRunId: 'run-1',
         usage: {
           inputTokens: 10,
           outputTokens: 5,
@@ -109,10 +102,6 @@ test('Maka subject preserves attributable usage when Session cleanup is indeterm
         costUsd: 0.02,
       };
     },
-    async removeSession() {
-      throw new Error('cleanup unavailable');
-    },
-    async stopTurn() {},
   };
   const ids = ['session-1', 'turn-1'];
   const adapter = createMakaSubjectAdapter({
@@ -141,8 +130,8 @@ test('Maka subject preserves attributable usage when Session cleanup is indeterm
     },
     costUsd: 0.02,
     durationMs: 1,
-    status: 'indeterminate',
-    failureReason: 'Runtime Host Session cleanup failed: cleanup unavailable',
+    status: 'failed',
+    failureReason: 'provider failed',
     artifacts: [
       {
         kind: 'runtime_host_run',
