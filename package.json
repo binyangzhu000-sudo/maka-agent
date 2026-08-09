@@ -17,6 +17,7 @@
     "packages/runtime-host",
     "packages/computer-use",
     "packages/headless",
+    "packages/eval",
     "packages/cli",
     "packages/ui",
     "apps/desktop"

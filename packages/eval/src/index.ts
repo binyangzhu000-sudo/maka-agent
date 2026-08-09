@@ -1,0 +1,50 @@
+export {
+  expandExperiment,
+  type BenchmarkSpec,
+  type ExecutorSpec,
+  type ExperimentCell,
+  type ExperimentSpec,
+  type JsonObject,
+  type JsonPrimitive,
+  type JsonValue,
+  type SubjectSpec,
+  type TaskSpec,
+} from './experiment.js';
+export {
+  isReplaceableAttempt,
+  selectCellResult,
+  type CellAttempt,
+  type EvalResult,
+  type EvalResultStatus,
+  type NormalizedUsage,
+} from './result.js';
+export {
+  InMemoryAttemptStore,
+  runExperiment,
+  type AttemptStore,
+  type ExperimentExecutor,
+  type ExperimentRunResult,
+  type RunExperimentInput,
+  type SubjectAdapter,
+  type SubjectExecutionContext,
+  type SubjectExecutionResult,
+} from './runner.js';
+export { FileAttemptStore } from './attempt-store.js';
+export { parseExperimentSpec } from './spec.js';
+export {
+  createMakaRuntimeHostClient,
+  createMakaSubjectAdapter,
+  type CreateMakaSubjectAdapterInput,
+  type MakaRuntimeHostClient,
+} from './runtime-host-subject.js';
+export { createExternalSubjectAdapter } from './external-subject.js';
+export {
+  createHarborExecutorAdapter,
+  createPierExecutorAdapter,
+  type BenchmarkExecutorDriver,
+  type ExecutorVerificationResult,
+} from './executor-adapter.js';
+export {
+  openExperimentDirectory,
+  type ExperimentDirectory,
+} from './experiment-directory.js';
