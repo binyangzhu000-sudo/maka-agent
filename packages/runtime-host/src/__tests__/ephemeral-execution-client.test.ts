@@ -102,6 +102,50 @@ test('ephemeral execution waits for Host quiescence and attributes every Session
   ]);
 });
 
+test('ephemeral execution retires its Session when Turn startup fails', async () => {
+  const operations: string[] = [];
+  const failure = new Error('transport lost during start');
+  const connection = {
+    async request(operation: string) {
+      operations.push(operation);
+      if (operation === 'session.create') return {};
+      if (operation === 'session.catalog.query') {
+        return { kind: 'session', session: { revision: 1 } };
+      }
+      if (operation === 'session.remove') {
+        return { kind: 'removed', sessionId: 'execution-1' };
+      }
+      throw new Error(`unexpected operation ${operation}`);
+    },
+    async startTurn() {
+      throw failure;
+    },
+    async queryTurn() {
+      throw new Error('turn was not admitted');
+    },
+  } as unknown as RuntimeHostConnection;
+
+  await assert.rejects(
+    executeEphemeralRuntimeHostSession(
+      connection,
+      {
+        executionId: 'execution-1',
+        turnId: 'root-turn',
+        cwd: '/workspace',
+        name: 'subject',
+        content: { text: 'Solve it' },
+        modelTarget: { kind: 'explicit', connectionSlug: 'connection', model: 'model' },
+        permissionMode: 'bypass',
+        collaborationMode: 'agent',
+        orchestrationMode: 'default',
+      },
+      { pollIntervalMs: 0, requestTimeoutMs: 100 },
+    ),
+    failure,
+  );
+  assert.deepEqual(operations, ['session.create', 'session.catalog.query', 'session.remove']);
+});
+
 function usageRow(
   sessionId: string,
   turnId: string,

@@ -62,45 +62,72 @@ export async function executeEphemeralRuntimeHostSession(
   const { executionId: sessionId, turnId, content, maxSteps, ...session } = input;
 
   await createOrReconcile(connection, { ...session, sessionId }, timeout);
-  const started = await startOrReconcile(
-    connection,
-    { sessionId, turnId, content, ...(maxSteps === undefined ? {} : { maxSteps }) },
-    timeout,
-  );
-  if (started.kind === 'blocked') {
+  try {
+    const started = await startOrReconcile(
+      connection,
+      { sessionId, turnId, content, ...(maxSteps === undefined ? {} : { maxSteps }) },
+      timeout,
+    );
+    if (started.kind === 'blocked') {
+      await retireWhenQuiescent(connection, sessionId, timeout, pollInterval, options.signal);
+      return {
+        status: 'failed',
+        executionId: sessionId,
+        rootTurnId: turnId,
+        rootRunId: '',
+        failureReason: 'Runtime Host blocked the root Turn',
+        usage: EMPTY_USAGE,
+        costUsd: null,
+      };
+    }
+
+    const terminal = await waitForRootTurn(
+      connection,
+      { sessionId, turnId, runId: started.turn.runId },
+      timeout,
+      pollInterval,
+      options.signal,
+    );
     await retireWhenQuiescent(connection, sessionId, timeout, pollInterval, options.signal);
+    const usage = await readSessionUsage(connection, sessionId, startedAt, now(), timeout);
     return {
-      status: 'failed',
+      status: terminal.status,
       executionId: sessionId,
       rootTurnId: turnId,
-      rootRunId: '',
-      failureReason: 'Runtime Host blocked the root Turn',
-      usage: EMPTY_USAGE,
-      costUsd: null,
+      rootRunId: terminal.runId,
+      ...(terminal.status === 'failed'
+        ? { failureReason: terminal.failureClass }
+        : terminal.status === 'cancelled'
+          ? { failureReason: terminal.abortSource }
+          : {}),
+      ...usage,
     };
+  } catch (error) {
+    await bestEffortRetire(connection, sessionId, timeout);
+    throw error;
   }
+}
 
-  const terminal = await waitForRootTurn(
-    connection,
-    { sessionId, turnId, runId: started.turn.runId },
-    timeout,
-    pollInterval,
-    options.signal,
-  );
-  await retireWhenQuiescent(connection, sessionId, timeout, pollInterval, options.signal);
-  const usage = await readSessionUsage(connection, sessionId, startedAt, now(), timeout);
-  return {
-    status: terminal.status,
-    executionId: sessionId,
-    rootTurnId: turnId,
-    rootRunId: terminal.runId,
-    ...(terminal.status === 'failed'
-      ? { failureReason: terminal.failureClass }
-      : terminal.status === 'cancelled'
-        ? { failureReason: terminal.abortSource }
-        : {}),
-    ...usage,
-  };
+async function bestEffortRetire(
+  connection: RuntimeHostConnection,
+  sessionId: string,
+  timeout: number,
+): Promise<void> {
+  try {
+    const queried = await connection.request(
+      'session.catalog.query',
+      { kind: 'get', sessionId },
+      timeout,
+    );
+    if (queried.kind !== 'session' || !queried.session || 'kind' in queried.session) return;
+    await connection.request(
+      'session.remove',
+      { sessionId, expectedRevision: queried.session.revision },
+      timeout,
+    );
+  } catch {
+    // Preserve the execution failure that made the result indeterminate.
+  }
 }
 
 async function createOrReconcile(
