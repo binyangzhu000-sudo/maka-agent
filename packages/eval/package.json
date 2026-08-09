@@ -15,6 +15,14 @@
     "./cli": {
       "types": "./dist/cli.d.ts",
       "default": "./dist/cli.js"
+    },
+    "./harbor": {
+      "types": "./dist/harbor-executor.d.ts",
+      "default": "./dist/harbor-executor.js"
+    },
+    "./pier": {
+      "types": "./dist/harbor-executor.d.ts",
+      "default": "./dist/harbor-executor.js"
     }
   },
   "scripts": {

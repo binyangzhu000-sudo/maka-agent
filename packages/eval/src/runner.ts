@@ -27,6 +27,7 @@ export interface SubjectExecutionResult {
 
 export interface SubjectExecutionEnvironment {
   readonly cwd: string;
+  readonly taskInput?: string;
   readonly metadata: JsonObject;
   readonly executeMaka?: (
     input: HostedExecutionStartInput,
@@ -188,7 +189,6 @@ async function executeCell(
       cell,
       environment,
       subject,
-      ...(signal ? { signal } : {}),
     });
     const cancelledByCaller = signal?.aborted === true;
     const subjectInfrastructureFailed = subject.status === 'infra_failed';

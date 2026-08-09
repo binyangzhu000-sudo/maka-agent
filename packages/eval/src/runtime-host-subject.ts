@@ -51,7 +51,7 @@ export function createMakaSubjectAdapter(
             collaborationMode: config.collaborationMode,
             orchestrationMode: config.orchestrationMode,
             ...(config.thinkingLevel === null ? {} : { thinkingLevel: config.thinkingLevel }),
-            content: { text: cell.task.input },
+            content: { text: context.taskInput ?? cell.task.input },
             maxSteps: config.maxSteps,
           },
           {

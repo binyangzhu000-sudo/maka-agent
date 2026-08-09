@@ -27,7 +27,7 @@ export function createExternalSubjectAdapter(options?: {
       const args = config.args.map((argument) =>
         expandArgument(argument, {
           taskId: cell.task.id,
-          taskInput: cell.task.input,
+          taskInput: context.taskInput ?? cell.task.input,
           subjectId: cell.subject.id,
           repetition: String(cell.repetition),
         }),
@@ -50,7 +50,7 @@ export function createExternalSubjectAdapter(options?: {
             usage: EMPTY_USAGE,
             costUsd: null,
             durationMs,
-            status: 'failed',
+            status: context.signal?.aborted ? 'indeterminate' : 'failed',
             artifacts: [{ kind: 'external_process', exitCode: processResult.exitCode }],
           };
         }
