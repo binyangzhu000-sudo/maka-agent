@@ -151,7 +151,7 @@ export class HostSessionRetirementCoordinator {
       if (stopped.has(rootId)) continue;
       let sessionIds: readonly string[];
       try {
-        sessionIds = await this.#readFamilySessionIds(rootId);
+        sessionIds = await this.#readHostedExecutionSessionIds(rootId);
       } catch (error) {
         if (
           error instanceof SessionRetirementMissingSessionError ||
@@ -423,7 +423,7 @@ export class HostSessionRetirementCoordinator {
     const roots = headers.filter(
       (header) =>
         header.conversationCopy?.state !== 'preparing' &&
-        !header.subagentParent &&
+        !header.subagentParent?.graph &&
         sessionRevisionFamilyId(header) === familyId,
     );
     const graphRoots = new Map(
@@ -442,6 +442,33 @@ export class HostSessionRetirementCoordinator {
       .map((header) => header.id);
     if (!members.includes(sessionId)) members.push(sessionId);
     return [...new Set(members)].sort();
+  }
+
+  async #readHostedExecutionSessionIds(sessionId: string): Promise<string[]> {
+    const target = await this.#stores.probeSessionRemoval(sessionId);
+    if (target.kind !== 'present') {
+      throw new SessionRetirementMissingSessionError(target.kind);
+    }
+    const headers = (await this.#stores.listHeaders()).filter(
+      (header) => header.conversationCopy?.state !== 'preparing',
+    );
+    const owned = new Set([sessionId]);
+    const families = new Set([sessionRevisionFamilyId(target.record.header)]);
+    const ordered = [sessionId];
+    for (;;) {
+      const discovered = headers.filter(
+        (header) =>
+          !owned.has(header.id) &&
+          (families.has(sessionRevisionFamilyId(header)) ||
+            (header.subagentParent && owned.has(header.subagentParent.parentSessionId))),
+      );
+      if (discovered.length === 0) return ordered;
+      for (const header of discovered.sort((left, right) => left.id.localeCompare(right.id))) {
+        owned.add(header.id);
+        families.add(sessionRevisionFamilyId(header));
+        ordered.push(header.id);
+      }
+    }
   }
 
   async #prepareRetirement(

@@ -318,7 +318,7 @@ describe('Host Session retirement coordinator', () => {
     });
   });
 
-  test('retires a bound child worktree only after the Session tombstone commits', async () => {
+  test('Hosted stop owns nested subagents before child worktree retirement', async () => {
     await withHarness(async (harness) => {
       const binding = {
         schemaVersion: 1 as const,
@@ -362,8 +362,20 @@ describe('Host Session retirement coordinator', () => {
           subagentWorkspace: binding,
         }),
       );
+      const graphChildId = await createClosedGraphOperator(harness, child.id, 'a');
+      harness.blockers.resource.add(child.id);
+      harness.blockers.resource.add(graphChildId);
+
+      const owned = await harness.coordinator.stopHostedExecution(harness.rootId);
+      assert.equal(owned[0], harness.rootId);
+      assert.deepEqual(new Set(owned), new Set([...harness.familyIds, child.id, graphChildId]));
+      assert.equal(harness.blockers.resource.has(child.id), false);
+      assert.equal(harness.blockers.resource.has(graphChildId), false);
       harness.retireWorktree = async (retired) => {
-        assert.deepEqual(harness.actions.finalizedWorkspacePatches, [child.id]);
+        assert.deepEqual(
+          new Set(harness.actions.finalizedWorkspacePatches),
+          new Set([child.id, graphChildId]),
+        );
         assert.deepEqual(await harness.store.probeSessionRemoval(child.id), { kind: 'removed' });
         harness.actions.retiredWorktrees.push(retired.leaseId);
       };
