@@ -13,7 +13,7 @@ export const STORAGE_ROOT_MARKER_SCHEMA_VERSION = 1 as const;
 const MAX_STORAGE_ROOT_MARKER_BYTES = 1_024;
 const ARTIFACT_WRITER_BOOTSTRAP_DIRECTORY = 'artifact-writer-bootstrap';
 
-export type StorageRootKind = 'interactive' | 'headless';
+export type StorageRootKind = 'interactive';
 export type StorageRootAccess = 'read' | 'write';
 
 const capabilityBrand: unique symbol = Symbol('StorageRootCapability');
@@ -31,9 +31,7 @@ export interface StorageRootCapability<K extends StorageRootKind = StorageRootKi
   readonly [capabilityBrand]: true;
 }
 
-export type DiscoveredStorageRootCapability =
-  | StorageRootCapability<'interactive'>
-  | StorageRootCapability<'headless'>;
+export type DiscoveredStorageRootCapability = StorageRootCapability<'interactive'>;
 
 export interface StorageRootLease<
   K extends StorageRootKind = StorageRootKind,
@@ -149,7 +147,6 @@ export type StorageRootAuthorityErrorCode =
   | 'root_not_found'
   | 'root_unmarked'
   | 'invalid_marker'
-  | 'root_kind_mismatch'
   | 'root_identity_collision'
   | 'root_identity_changed'
   | 'invalid_repair'
@@ -174,7 +171,7 @@ export class StorageRootAuthorityError extends Error {
 }
 
 function assertStorageRootKind(kind: unknown): asserts kind is StorageRootKind {
-  if (kind !== 'interactive' && kind !== 'headless') {
+  if (kind !== 'interactive') {
     throw new StorageRootAuthorityError(
       'invalid_root_kind',
       `Unsupported storage root kind: ${String(kind)}`,
@@ -205,9 +202,7 @@ export async function discoverMarkedStorageRoot(
       markerMismatchCode: 'root_identity_collision',
       markerMismatchMessage: `Storage root marker belongs to a different directory: ${canonicalPath}`,
     });
-    return marker.kind === 'interactive'
-      ? createCapability('interactive', canonicalPath, marker.rootId, identity)
-      : createCapability('headless', canonicalPath, marker.rootId, identity);
+    return createCapability('interactive', canonicalPath, marker.rootId, identity);
   });
 }
 
@@ -601,14 +596,6 @@ export async function tryAcquireInteractiveRootReader(
     'Unable to acquire the interactive storage root reader lock',
     () => acquireInteractiveRootLock(capability, 'read'),
   );
-}
-
-export function createHeadlessRootLease<A extends StorageRootAccess>(
-  capability: StorageRootCapability<'headless'>,
-  access: A,
-): StorageRootLease<'headless', A> {
-  const record = requireCapability(capability, 'headless');
-  return createLease(record, access, () => true);
 }
 
 export async function assertStorageRootLease<
@@ -1100,16 +1087,9 @@ async function assertRootPathIdentity(
 
 async function readAndValidateRootMarker(
   root: string,
-  expectedKind: StorageRootKind,
+  _expectedKind: StorageRootKind,
 ): Promise<RootMarker> {
-  const marker = await readRootMarker(root);
-  if (marker.kind !== expectedKind) {
-    throw new StorageRootAuthorityError(
-      'root_kind_mismatch',
-      `Storage root ${root} is ${marker.kind}, not ${expectedKind}`,
-    );
-  }
-  return marker;
+  return readRootMarker(root);
 }
 
 async function readRootMarker(root: string): Promise<RootMarker> {
@@ -1154,7 +1134,7 @@ function isRootMarker(value: unknown): value is RootMarker {
   const marker = value as Record<string, unknown>;
   return (
     marker.schemaVersion === STORAGE_ROOT_MARKER_SCHEMA_VERSION &&
-    (marker.kind === 'interactive' || marker.kind === 'headless') &&
+    marker.kind === 'interactive' &&
     typeof marker.rootId === 'string' &&
     /^[a-f0-9]{64}$/.test(marker.rootId) &&
     isMarkerRootIdentity(marker.rootIdentity)

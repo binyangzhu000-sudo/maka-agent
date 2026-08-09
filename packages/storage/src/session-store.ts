@@ -308,7 +308,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
   /**
    * One-time legacy JSONL session import, awaited by every public method so
    * upgraded installs see their pre-cutover sessions from any entry point —
-   * desktop boot, CLI, headless, and `maka --resume <legacy-id>` all reach a
+   * desktop boot, CLI, and `maka --resume <legacy-id>` all reach a
    * read/write method before touching session data, and each awaits this
    * latch (same shape as `importLegacyCatalogOnce` in project-catalog.ts).
    *
