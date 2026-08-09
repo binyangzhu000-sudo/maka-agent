@@ -226,8 +226,10 @@ function runProcess(input: {
     const fail = (error: Error) => {
       if (settled) return;
       settled = true;
-      killProcessTree(child.pid);
-      reject(error);
+      void killProcessTree(child.pid).then(
+        () => reject(error),
+        () => reject(error),
+      );
     };
     const capture = (target: Buffer[]) => (chunk: Buffer) => {
       outputBytes += chunk.byteLength;
@@ -259,13 +261,21 @@ function runProcess(input: {
   });
 }
 
-function killProcessTree(pid: number | undefined): void {
-  if (pid === undefined) return;
+function killProcessTree(pid: number | undefined): Promise<void> {
+  if (pid === undefined) return Promise.resolve();
+  if (process.platform === 'win32') {
+    return new Promise((resolve) => {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
+      killer.once('error', () => resolve());
+      killer.once('close', () => resolve());
+    });
+  }
   try {
-    process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL');
+    process.kill(-pid, 'SIGKILL');
   } catch {
     // The process may have exited between the failing read and the signal.
   }
+  return Promise.resolve();
 }
 
 function exactRecord(

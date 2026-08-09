@@ -78,9 +78,7 @@ test('external subject does not start when its execution is already cancelled', 
   assert.deepEqual(result.artifacts, [{ kind: 'external_process_failure', reason: 'cancelled' }]);
 });
 
-test('external subject output limit terminates the whole process group', {
-  skip: process.platform === 'win32',
-}, async () => {
+test('external subject output limit terminates the whole process group', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'maka-eval-external-tree-'));
   const pidPath = join(cwd, 'grandchild.pid');
   const cell = externalCell();
