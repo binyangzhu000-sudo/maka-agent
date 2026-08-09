@@ -129,13 +129,13 @@ test('Maka subject preserves Runtime Host failure attribution', async () => {
     costUsd: 0.02,
     durationMs: 1,
     status: 'failed',
-    failureReason: 'provider failed',
     artifacts: [
       {
         kind: 'runtime_host_run',
         sessionId: 'session-1',
         turnId: 'turn-1',
         runId: 'run-1',
+        reason: 'provider failed',
       },
     ],
   });

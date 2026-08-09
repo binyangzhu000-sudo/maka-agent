@@ -130,7 +130,7 @@ test('maka eval public path loads a declared executor and runs a real external s
   const evalModuleUrl = new URL('../index.js', import.meta.url).href;
   await writeFile(
     modulePath,
-    `import {createLocalExternalExecution} from ${JSON.stringify(evalModuleUrl)};const executeExternal=createLocalExternalExecution();export function createExecutor(){return{kind:"harbor",async execute({runSubject}){const subject=await runSubject({cwd:process.cwd(),metadata:{},executeExternal});return{score:subject.status==="completed"?1:null,usage:subject.usage,costUsd:subject.costUsd,durationMs:subject.durationMs,status:subject.status==="completed"?"completed":"subject_failed",...(subject.status==="completed"?{}:{failureReason:"subject failed"}),artifacts:subject.artifacts}}}}`,
+    `import {createLocalExternalExecution} from ${JSON.stringify(evalModuleUrl)};const executeExternal=createLocalExternalExecution();export function createExecutor(){return{kind:"harbor",async execute({runSubject}){const subject=await runSubject({cwd:process.cwd(),metadata:{},executeExternal});return{score:subject.status==="completed"?1:null,usage:subject.usage,costUsd:subject.costUsd,durationMs:subject.durationMs,status:subject.status==="completed"?"completed":"subject_failed",artifacts:subject.artifacts}}}}`,
   );
   await writeFile(
     specPath,

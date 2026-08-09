@@ -51,7 +51,6 @@ export function createExternalSubjectAdapter(options?: {
             costUsd: null,
             durationMs,
             status: 'failed',
-            failureReason: `external subject exited with code ${processResult.exitCode}`,
             artifacts: [{ kind: 'external_process', exitCode: processResult.exitCode }],
           };
         }
@@ -76,8 +75,12 @@ export function createExternalSubjectAdapter(options?: {
           costUsd: null,
           durationMs: now() - startedAt,
           status: context.signal?.aborted ? 'failed' : 'infra_failed',
-          failureReason: errorMessage(error),
-          artifacts: [],
+          artifacts: [
+            {
+              kind: 'external_process_failure',
+              reason: context.signal?.aborted ? 'cancelled' : classifyProcessFailure(error),
+            },
+          ],
         };
       }
     },
@@ -294,6 +297,10 @@ function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function classifyProcessFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === 'external subject returned invalid JSON') return 'invalid_result';
+  if (message.includes('output exceeded')) return 'output_limit';
+  if (message.includes('result.')) return 'invalid_result';
+  return 'launch_failed';
 }

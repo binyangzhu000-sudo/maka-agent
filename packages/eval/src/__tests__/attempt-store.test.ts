@@ -22,13 +22,18 @@ test('experiment attempt authority admits only one writer', async () => {
   const first = new FileAttemptStore(join(root, 'attempts'));
   const second = new FileAttemptStore(join(root, 'attempts'));
   let release!: () => void;
+  let entered!: () => void;
+  const acquired = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
   const held = first.runExclusive(
     () =>
       new Promise<void>((resolve) => {
         release = resolve;
+        entered();
       }),
   );
-  await new Promise((resolve) => setImmediate(resolve));
+  await acquired;
 
   await assert.rejects(
     second.runExclusive(async () => {}),
@@ -47,6 +52,18 @@ test('unpublished temporary records cannot poison immutable attempt history', as
   await writeFile(join(store.path, 'interrupted.tmp'), '{');
 
   assert.deepEqual(await store.list(first.cellId), [first]);
+});
+
+test('attempt records contain only the result kernel fields', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-attempt-shape-'));
+  const store = new FileAttemptStore(join(root, 'attempts'));
+  const base = attempt(1, 'infra_failed');
+  const value = {
+    ...base,
+    result: { ...base.result, failureReason: 'legacy diagnostic' },
+  } as CellAttempt;
+
+  await assert.rejects(store.append(value), /result.failureReason is not supported/);
 });
 
 function attempt(sequence: number, status: CellAttempt['result']['status']): CellAttempt {
@@ -68,7 +85,6 @@ function attempt(sequence: number, status: CellAttempt['result']['status']): Cel
       costUsd: 0.01,
       durationMs: 1,
       status,
-      ...(status === 'completed' ? {} : { failureReason: status }),
       artifacts: [],
     },
   };

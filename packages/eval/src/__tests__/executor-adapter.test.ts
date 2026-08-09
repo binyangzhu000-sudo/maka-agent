@@ -86,14 +86,12 @@ test('subject failure cannot be promoted to completed by a verifier', async () =
         costUsd: 0.02,
         durationMs: 12,
         status: 'failed',
-        failureReason: 'exit 1',
         artifacts: [{ kind: 'subject' }],
       };
     },
   });
 
   assert.equal(result.status, 'subject_failed');
-  assert.equal(result.failureReason, 'exit 1');
   assert.equal(result.score, 0.25);
 });
 
@@ -126,8 +124,7 @@ test('verifier infrastructure failure preserves attributable subject data', asyn
     costUsd: 0.02,
     durationMs: 12,
     status: 'infra_failed',
-    failureReason: 'executor verification failed: verifier unavailable',
-    artifacts: [{ kind: 'subject' }],
+    artifacts: [{ kind: 'subject' }, { kind: 'executor_failure', phase: 'verify' }],
   });
 });
 

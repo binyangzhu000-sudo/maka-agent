@@ -54,7 +54,7 @@ test('external subject never persists stderr from a failed credential-bearing pr
   });
 
   assert.equal(result.status, 'failed');
-  assert.equal(result.failureReason, 'external subject exited with code 7');
+  assert.deepEqual(result.artifacts, [{ kind: 'external_process', exitCode: 7 }]);
   assert.doesNotMatch(JSON.stringify(result), /do-not-store/);
 });
 

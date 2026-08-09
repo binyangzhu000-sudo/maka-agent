@@ -66,14 +66,22 @@ export function createMakaSubjectAdapter(
           costUsd: result.costUsd,
           durationMs: now() - startedAt,
           status: result.status === 'completed' ? 'completed' : 'failed',
-          ...(result.failureReason ? { failureReason: result.failureReason } : {}),
           artifacts: [
-            runtimeHostRunArtifact(result.executionId, result.rootTurnId, result.rootRunId),
+            runtimeHostRunArtifact(
+              result.executionId,
+              result.rootTurnId,
+              result.rootRunId,
+              result.failureReason,
+            ),
           ],
         };
       } catch (error) {
-        return failureResult('indeterminate', errorMessage(error), now() - startedAt, [
-          { kind: 'runtime_host_execution', executionId: sessionId },
+        return failureResult('indeterminate', now() - startedAt, [
+          {
+            kind: 'runtime_host_execution',
+            executionId: sessionId,
+            reason: classifyRuntimeHostFailure(error),
+          },
         ]);
       }
     },
@@ -136,7 +144,6 @@ function decodeMakaSubjectConfig(config: JsonObject): MakaSubjectConfig {
 
 function failureResult(
   status: 'failed' | 'infra_failed' | 'indeterminate',
-  failureReason: string,
   durationMs: number,
   artifacts: readonly JsonObject[] = [],
 ): SubjectExecutionResult {
@@ -145,15 +152,20 @@ function failureResult(
     costUsd: null,
     durationMs,
     status,
-    failureReason,
     artifacts,
   };
 }
 
-function runtimeHostRunArtifact(sessionId: string, turnId: string, runId: string): JsonObject {
-  return { kind: 'runtime_host_run', sessionId, turnId, runId };
+function runtimeHostRunArtifact(
+  sessionId: string,
+  turnId: string,
+  runId: string,
+  reason?: string,
+): JsonObject {
+  return { kind: 'runtime_host_run', sessionId, turnId, runId, ...(reason ? { reason } : {}) };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function classifyRuntimeHostFailure(error: unknown): string {
+  if (error instanceof Error && error.name === 'AbortError') return 'cancelled';
+  return 'unavailable';
 }

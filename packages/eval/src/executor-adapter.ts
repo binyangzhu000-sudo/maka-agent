@@ -18,7 +18,6 @@ const EMPTY_USAGE = Object.freeze({
 export interface ExecutorVerificationResult {
   readonly status: EvalResultStatus;
   readonly score: number | null;
-  readonly failureReason?: string;
   readonly artifacts: readonly JsonObject[];
 }
 
@@ -53,16 +52,16 @@ function createExecutorAdapter(
       let context: SubjectExecutionContext;
       try {
         context = await driver.prepare(cell);
-      } catch (error) {
-        return failedResult('infra_failed', `executor prepare failed: ${errorMessage(error)}`);
+      } catch {
+        return failedResult('infra_failed', 'prepare');
       }
 
       let subject: SubjectExecutionResult;
       try {
         subject = await runSubject(context);
-      } catch (error) {
+      } catch {
         subject = {
-          ...failedResult('infra_failed', `subject execution failed: ${errorMessage(error)}`),
+          ...failedResult('infra_failed', 'subject'),
           status: 'infra_failed',
         };
       }
@@ -75,7 +74,6 @@ function createExecutorAdapter(
           costUsd: subject.costUsd,
           durationMs: subject.durationMs,
           status: subject.status,
-          failureReason: subject.failureReason ?? `subject ${subject.status}`,
           artifacts: subject.artifacts,
         };
       } else {
@@ -88,23 +86,16 @@ function createExecutorAdapter(
             costUsd: subject.costUsd,
             durationMs: subject.durationMs,
             status,
-            ...(status === 'completed'
-              ? {}
-              : {
-                  failureReason:
-                    subject.failureReason ?? verified.failureReason ?? `cell ${status}`,
-                }),
             artifacts: [...subject.artifacts, ...verified.artifacts],
           };
-        } catch (error) {
+        } catch {
           result = {
             score: null,
             usage: subject.usage,
             costUsd: subject.costUsd,
             durationMs: subject.durationMs,
             status: 'infra_failed',
-            failureReason: `executor verification failed: ${errorMessage(error)}`,
-            artifacts: subject.artifacts,
+            artifacts: [...subject.artifacts, executorFailureArtifact('verify')],
           };
         }
       }
@@ -112,12 +103,12 @@ function createExecutorAdapter(
       if (driver.cleanup) {
         try {
           await driver.cleanup({ cell, context });
-        } catch (error) {
+        } catch {
           return {
             ...result,
             score: null,
             status: 'indeterminate',
-            failureReason: `executor cleanup failed: ${errorMessage(error)}`,
+            artifacts: [...result.artifacts, executorFailureArtifact('cleanup')],
           };
         }
       }
@@ -126,18 +117,20 @@ function createExecutorAdapter(
   };
 }
 
-function failedResult(status: 'infra_failed' | 'indeterminate', failureReason: string): EvalResult {
+function failedResult(
+  status: 'infra_failed' | 'indeterminate',
+  phase: 'prepare' | 'subject',
+): EvalResult {
   return {
     score: null,
     usage: EMPTY_USAGE,
     costUsd: null,
     durationMs: 0,
     status,
-    failureReason,
-    artifacts: [],
+    artifacts: [executorFailureArtifact(phase)],
   };
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function executorFailureArtifact(phase: 'prepare' | 'subject' | 'verify' | 'cleanup'): JsonObject {
+  return { kind: 'executor_failure', phase };
 }

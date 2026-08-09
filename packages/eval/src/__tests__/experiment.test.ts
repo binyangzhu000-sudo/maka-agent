@@ -245,7 +245,6 @@ function attempt(sequence: number, status: CellAttempt['result']['status']): Cel
       costUsd: 0.01,
       durationMs: 1,
       status,
-      ...(status === 'completed' ? {} : { failureReason: status }),
       artifacts: [],
     },
   };

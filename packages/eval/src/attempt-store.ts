@@ -111,17 +111,33 @@ async function removeStaleLock(path: string): Promise<boolean> {
 }
 
 function decodeCellAttempt(value: unknown, where: string): CellAttempt {
-  const record = object(value, where);
-  const result = object(record.result, `${where}.result`);
-  const usage = object(result.usage, `${where}.result.usage`);
+  const record = exactObject(value, where, [
+    'cellId',
+    'sequence',
+    'startedAt',
+    'completedAt',
+    'result',
+  ]);
+  const result = exactObject(record.result, `${where}.result`, [
+    'score',
+    'usage',
+    'costUsd',
+    'durationMs',
+    'status',
+    'artifacts',
+  ]);
+  const usage = exactObject(result.usage, `${where}.result.usage`, [
+    'inputTokens',
+    'outputTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'reasoningTokens',
+    'totalTokens',
+  ]);
   const status = resultStatus(result.status, `${where}.result.status`);
   const artifacts = array(result.artifacts, `${where}.result.artifacts`).map((artifact, index) =>
     object(artifact, `${where}.result.artifacts[${index}]`),
   );
-  const failureReason = optionalString(result.failureReason, `${where}.result.failureReason`);
-  if (status !== 'completed' && !failureReason) {
-    throw new Error(`${where}.result.failureReason is required for ${status}`);
-  }
   return {
     cellId: nonemptyString(record.cellId, `${where}.cellId`),
     sequence: positiveInteger(record.sequence, `${where}.sequence`),
@@ -133,7 +149,6 @@ function decodeCellAttempt(value: unknown, where: string): CellAttempt {
       costUsd: nullableNonnegativeNumber(result.costUsd, `${where}.result.costUsd`),
       durationMs: nonnegativeNumber(result.durationMs, `${where}.result.durationMs`),
       status,
-      ...(failureReason ? { failureReason } : {}),
       artifacts: artifacts as JsonObject[],
     },
   };
@@ -169,6 +184,22 @@ function object(value: unknown, where: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function exactObject(
+  value: unknown,
+  where: string,
+  fields: readonly string[],
+): Record<string, unknown> {
+  const record = object(value, where);
+  const allowed = new Set(fields);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) throw new Error(`${where}.${key} is not supported`);
+  }
+  for (const field of fields) {
+    if (!Object.hasOwn(record, field)) throw new Error(`${where}.${field} is required`);
+  }
+  return record;
+}
+
 function array(value: unknown, where: string): unknown[] {
   if (!Array.isArray(value)) throw new Error(`${where} must be an array`);
   return value;
@@ -176,12 +207,6 @@ function array(value: unknown, where: string): unknown[] {
 
 function nonemptyString(value: unknown, where: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new Error(`${where} is required`);
-  return value;
-}
-
-function optionalString(value: unknown, where: string): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' || value.length === 0) throw new Error(`${where} is invalid`);
   return value;
 }
 

@@ -17,7 +17,6 @@ export interface EvalResult {
   readonly costUsd: number | null;
   readonly durationMs: number;
   readonly status: EvalResultStatus;
-  readonly failureReason?: string;
   readonly artifacts: readonly JsonObject[];
 }
 
