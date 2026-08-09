@@ -26,6 +26,26 @@ const CONNECTION_CONTEXT: ConnectionContext = {
 };
 
 describe('Host Session retirement coordinator', () => {
+  test('stops the whole Session authority before ephemeral retirement', async () => {
+    await withHarness(async (harness) => {
+      harness.blockers.root.add(harness.rootId);
+      harness.blockers.goal.add(harness.rootId);
+
+      assert.deepEqual(
+        await harness.coordinator.handlers['session.stop'](
+          { sessionId: harness.rootId },
+          CONNECTION_CONTEXT,
+        ),
+        {
+          ok: true,
+          result: { kind: 'stopped', sessionId: harness.rootId },
+        },
+      );
+      assert.equal(harness.blockers.root.has(harness.rootId), false);
+      assert.equal(harness.blockers.goal.has(harness.rootId), false);
+    });
+  });
+
   test('archives, restores, and removes one whole edit-and-resend family', async () => {
     await withHarness(async (harness) => {
       const archived = await harness.coordinator.handlers['session.lifecycle.set'](
@@ -791,6 +811,9 @@ async function withHarness(
       admission: new SessionAdmissionGate(),
       memoryExtractionLane,
       root: {
+        stopSession: async (sessionId) => {
+          blockers.root.delete(sessionId);
+        },
         readRootState: (sessionId) =>
           blockers.root.has(sessionId)
             ? ({ kind: 'reserved' } as const)
@@ -805,6 +828,7 @@ async function withHarness(
       },
       goals: {
         hasLiveGoal: (sessionId) => blockers.goal.has(sessionId),
+        stopSession: (sessionId) => blockers.goal.delete(sessionId),
         beginSessionRetirement: () => retirementHandle(actions, 'goal'),
         unarchiveSessions: () => undefined,
       },

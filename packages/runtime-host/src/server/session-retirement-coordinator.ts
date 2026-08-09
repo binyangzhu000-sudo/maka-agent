@@ -19,6 +19,7 @@ import {
   type SessionLifecycleSetInput,
   type SessionRemoveInput,
   type SessionRemoveResult,
+  type SessionStopInput,
 } from '../protocol/index.js';
 import {
   HostAutomationSessionBusyError,
@@ -52,12 +53,12 @@ type RetirementStores = Pick<
   | 'setSessionsLifecycleVersioned'
 >;
 
-type RetirementRoot = Pick<RootTurnCoordinator, 'readRootState'>;
+type RetirementRoot = Pick<RootTurnCoordinator, 'readRootState' | 'stopSession'>;
 type RetirementMessages = Pick<HostMessageCoordinator, 'hasLiveSessionState' | 'retireSessions'>;
 type RetirementInteractions = Pick<HostInteractionCoordinator, 'hasPendingSession'>;
 type RetirementGoals = Pick<
   HostGoalCoordinator,
-  'beginSessionRetirement' | 'hasLiveGoal' | 'unarchiveSessions'
+  'beginSessionRetirement' | 'hasLiveGoal' | 'stopSession' | 'unarchiveSessions'
 >;
 type RetirementResources = Pick<HostRuntimeResourceCoordinator, 'hasLiveSessionResources'>;
 type RetirementSessionEffects = {
@@ -132,9 +133,23 @@ class SessionRetirementBusyError extends Error {
 /** Host-owned archive, unarchive, remove, and revision-family commit authority. */
 export class HostSessionRetirementCoordinator {
   readonly handlers: SessionRetirementOperationHandlerMap = {
+    'session.stop': (input) => this.#stop(input),
     'session.lifecycle.set': (input) => this.#setLifecycle(input),
     'session.remove': (input) => this.#remove(input),
   };
+
+  async #stop(input: SessionStopInput): Promise<OperationOutcome<'session.stop'>> {
+    try {
+      this.#goals.stopSession(input.sessionId);
+      await this.#root.stopSession(input.sessionId, { source: 'stop_button', mode: 'immediate' });
+      return { ok: true, result: { kind: 'stopped', sessionId: input.sessionId } };
+    } catch (error) {
+      if (isSessionNotFoundError(error)) {
+        return { ok: false, error: { code: 'not_found', message: 'Session does not exist' } };
+      }
+      return { ok: false, error: { code: 'internal_failure', message: 'Session stop failed' } };
+    }
+  }
 
   readonly #stores: RetirementStores;
   readonly #admission: SessionAdmissionGate;

@@ -34,6 +34,7 @@ export interface EphemeralRuntimeHostExecutionResult {
   readonly failureReason?: string;
   readonly usage: EphemeralRuntimeHostUsage;
   readonly costUsd: number | null;
+  readonly usageComplete: boolean;
 }
 
 export interface EphemeralRuntimeHostExecutionOptions {
@@ -69,7 +70,7 @@ export async function executeEphemeralRuntimeHostSession(
       timeout,
     );
     if (started.kind === 'blocked') {
-      await retireWhenQuiescent(connection, sessionId, timeout, pollInterval, options.signal);
+      await retireWhenQuiescent(connection, sessionId, timeout, pollInterval);
       return {
         status: 'failed',
         executionId: sessionId,
@@ -78,6 +79,7 @@ export async function executeEphemeralRuntimeHostSession(
         failureReason: 'Runtime Host blocked the root Turn',
         usage: EMPTY_USAGE,
         costUsd: null,
+        usageComplete: true,
       };
     }
 
@@ -88,7 +90,7 @@ export async function executeEphemeralRuntimeHostSession(
       pollInterval,
       options.signal,
     );
-    await retireWhenQuiescent(connection, sessionId, timeout, pollInterval, options.signal);
+    await retireWhenQuiescent(connection, sessionId, timeout, pollInterval);
     const usage = await readSessionUsage(connection, sessionId, startedAt, now(), timeout);
     return {
       status: terminal.status,
@@ -114,6 +116,7 @@ async function bestEffortRetire(
   timeout: number,
 ): Promise<void> {
   try {
+    await connection.request('session.stop', { sessionId }, timeout);
     const queried = await connection.request(
       'session.catalog.query',
       { kind: 'get', sessionId },
@@ -138,6 +141,7 @@ async function createOrReconcile(
   try {
     await connection.request('session.create', input, timeout);
   } catch (error) {
+    if (!isCommitOutcomeUnknown(error)) throw error;
     const queried = await connection.request(
       'session.catalog.query',
       { kind: 'get', sessionId: input.sessionId },
@@ -155,6 +159,7 @@ async function startOrReconcile(
   try {
     return await connection.startTurn(input, timeout);
   } catch (error) {
+    if (!isReadTimeout(error)) throw error;
     try {
       const turn = await connection.queryTurn(
         { sessionId: input.sessionId, turnId: input.turnId },
@@ -174,8 +179,12 @@ async function waitForRootTurn(
   pollInterval: number,
   signal?: AbortSignal,
 ): Promise<Extract<TurnSnapshot, { status: 'completed' | 'failed' | 'cancelled' }>> {
+  let stopRequested = false;
   for (;;) {
-    if (signal?.aborted) await connection.stopTurn(identity, timeout);
+    if (signal?.aborted && !stopRequested) {
+      stopRequested = true;
+      await connection.request('session.stop', { sessionId: identity.sessionId }, timeout);
+    }
     const turn = await connection.queryTurn(identity, timeout);
     if (turn.status === 'completed' || turn.status === 'failed' || turn.status === 'cancelled') {
       return turn;
@@ -189,7 +198,6 @@ async function retireWhenQuiescent(
   sessionId: string,
   timeout: number,
   pollInterval: number,
-  signal?: AbortSignal,
 ): Promise<void> {
   for (;;) {
     const queried = await connection.request(
@@ -207,7 +215,7 @@ async function retireWhenQuiescent(
       );
       return;
     } catch (error) {
-      if (!isSessionBusy(error) || signal?.aborted) throw error;
+      if (!isSessionBusy(error)) throw error;
       await delay(pollInterval);
     }
   }
@@ -219,8 +227,13 @@ async function readSessionUsage(
   from: number,
   to: number,
   timeout: number,
-): Promise<{ usage: EphemeralRuntimeHostUsage; costUsd: number | null }> {
+): Promise<{
+  usage: EphemeralRuntimeHostUsage;
+  costUsd: number | null;
+  usageComplete: boolean;
+}> {
   const rows = [];
+  let usageComplete = true;
   let offset = 0;
   for (;;) {
     const page = await connection.request(
@@ -236,6 +249,9 @@ async function readSessionUsage(
     );
     if (page.kind !== 'logs' || page.source !== 'llm') {
       throw new Error('Runtime Host returned a non-LLM usage page');
+    }
+    if (page.provenance.unreadableRecords > 0 || page.provenance.pendingRepairs > 0) {
+      usageComplete = false;
     }
     rows.push(...page.rows.filter((row) => row.sessionId === sessionId));
     if (page.nextOffset === null) break;
@@ -257,7 +273,18 @@ async function readSessionUsage(
       rows.length === 0 || rows.some((row) => row.costUsd === undefined)
         ? null
         : rows.reduce((total, row) => total + (row.costUsd ?? 0), 0),
+    usageComplete,
   };
+}
+
+function isCommitOutcomeUnknown(error: unknown): boolean {
+  return error instanceof RuntimeHostOperationError && error.code === 'commit_outcome_unknown';
+}
+
+function isReadTimeout(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && error.code === 'read_timeout'
+  );
 }
 
 function isSessionBusy(error: unknown): boolean {

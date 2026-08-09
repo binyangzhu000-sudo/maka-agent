@@ -82,7 +82,7 @@ export type SessionRevisionOperationKey = Extract<
 >;
 export type SessionRetirementOperationKey = Extract<
   OperationKey,
-  'session.lifecycle.set' | 'session.remove'
+  'session.stop' | 'session.lifecycle.set' | 'session.remove'
 >;
 export type SessionEffectOperationKey = Extract<OperationKey, 'session.recap.generate'>;
 export type SessionCatalogOperationKey = Exclude<

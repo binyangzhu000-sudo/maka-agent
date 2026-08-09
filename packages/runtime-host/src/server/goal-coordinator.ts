@@ -131,6 +131,10 @@ export class HostGoalCoordinator {
     return goal !== undefined && !TERMINAL_GOAL_STATUSES.has(goal.status);
   }
 
+  stopSession(sessionId: string): void {
+    if (this.manager.clear(sessionId)) this.continuation.invalidateSession(sessionId);
+  }
+
   beginSessionRetirement(
     sessionIds: readonly string[],
     kind: 'archive' | 'remove',
