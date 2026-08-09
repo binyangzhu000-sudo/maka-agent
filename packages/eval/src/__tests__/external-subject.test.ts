@@ -3,14 +3,18 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createExternalSubjectAdapter, type ExperimentCell } from '../index.js';
+import {
+  createExternalSubjectAdapter,
+  createLocalExternalExecution,
+  type ExperimentCell,
+} from '../index.js';
 
 test('external subject executes its declared command without kernel changes', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'maka-eval-external-'));
   const adapter = createExternalSubjectAdapter();
   const result = await adapter.execute({
     cell: externalCell(),
-    context: { cwd, metadata: {} },
+    context: { cwd, metadata: {}, executeExternal: createLocalExternalExecution() },
   });
 
   assert.equal(result.status, 'completed');
@@ -28,7 +32,7 @@ test('external subject executes its declared command without kernel changes', as
 
 test('external subject never persists stderr from a failed credential-bearing process', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'maka-eval-external-failure-'));
-  const adapter = createExternalSubjectAdapter({ environment: { SECRET_TOKEN: 'do-not-store' } });
+  const adapter = createExternalSubjectAdapter();
   const cell = externalCell();
   const result = await adapter.execute({
     cell: {
@@ -42,7 +46,11 @@ test('external subject never persists stderr from a failed credential-bearing pr
         },
       },
     },
-    context: { cwd, metadata: {} },
+    context: {
+      cwd,
+      metadata: {},
+      executeExternal: createLocalExternalExecution({ SECRET_TOKEN: 'do-not-store' }),
+    },
   });
 
   assert.equal(result.status, 'failed');
@@ -73,7 +81,7 @@ test('external subject output limit terminates the whole process group', {
         },
       },
     },
-    context: { cwd, metadata: {} },
+    context: { cwd, metadata: {}, executeExternal: createLocalExternalExecution() },
   });
 
   assert.equal(result.status, 'infra_failed');

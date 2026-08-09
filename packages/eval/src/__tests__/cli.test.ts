@@ -6,7 +6,6 @@ import { test } from 'node:test';
 import {
   createHarborExecutorAdapter,
   runMakaEvalCli,
-  type MakaRuntimeHostClient,
   type SubjectExecutionResult,
 } from '../index.js';
 
@@ -64,7 +63,21 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
   const executor = createHarborExecutorAdapter({
     async prepare(cell) {
       prepared.push(cell.subject.id);
-      return { cwd: root, metadata: {} };
+      return {
+        cwd: root,
+        metadata: {},
+        async executeMaka(input) {
+          sessions.push({ name: input.name, orchestrationMode: input.orchestrationMode });
+          return {
+            status: 'completed',
+            executionId: input.executionId,
+            rootTurnId: input.turnId,
+            rootRunId: 'run',
+            usage: USAGE,
+            costUsd: 0.01,
+          };
+        },
+      };
     },
     async verify({ cell, subject }) {
       verified.push(cell.subject.id);
@@ -75,35 +88,17 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
       };
     },
   });
-  const client: MakaRuntimeHostClient = {
-    async execute(input) {
-      sessions.push({ name: input.name, orchestrationMode: input.orchestrationMode });
-      return {
-        status: 'completed',
-        executionId: input.executionId,
-        rootTurnId: input.turnId,
-        rootRunId: 'run',
-        usage: USAGE,
-        costUsd: 0.01,
-      };
-    },
-  };
-
-  const code = await runMakaEvalCli(
-    ['run', specPath, '--out', out, '--runtime-host-root', join(root, 'runtime-host')],
-    {
-      writeOut: () => {},
-      loadExecutor: async () => executor,
-      connectMakaClient: async () => ({ client, async close() {} }),
-      createExternalSubject: () => ({
-        kind: 'external',
-        async execute({ cell }): Promise<SubjectExecutionResult> {
-          external.push(cell.subject.id);
-          return completedSubject();
-        },
-      }),
-    },
-  );
+  const code = await runMakaEvalCli(['run', specPath, '--out', out], {
+    writeOut: () => {},
+    loadExecutor: async () => executor,
+    createExternalSubject: () => ({
+      kind: 'external',
+      async execute({ cell }): Promise<SubjectExecutionResult> {
+        external.push(cell.subject.id);
+        return completedSubject();
+      },
+    }),
+  });
 
   assert.equal(code, 0);
   assert.deepEqual(prepared, ['maka-default', 'maka-graph', 'competitor']);
@@ -132,9 +127,10 @@ test('maka eval public path loads a declared executor and runs a real external s
   const specPath = join(root, 'experiment.json');
   const modulePath = join(root, 'executor.mjs');
   const out = join(root, 'out');
+  const evalModuleUrl = new URL('../index.js', import.meta.url).href;
   await writeFile(
     modulePath,
-    'export function createExecutor(){return{kind:"harbor",async execute({runSubject}){const subject=await runSubject({cwd:process.cwd(),metadata:{}});return{score:subject.status==="completed"?1:null,usage:subject.usage,costUsd:subject.costUsd,durationMs:subject.durationMs,status:subject.status==="completed"?"completed":"subject_failed",...(subject.status==="completed"?{}:{failureReason:"subject failed"}),artifacts:subject.artifacts}}}}',
+    `import {createLocalExternalExecution} from ${JSON.stringify(evalModuleUrl)};const executeExternal=createLocalExternalExecution();export function createExecutor(){return{kind:"harbor",async execute({runSubject}){const subject=await runSubject({cwd:process.cwd(),metadata:{},executeExternal});return{score:subject.status==="completed"?1:null,usage:subject.usage,costUsd:subject.costUsd,durationMs:subject.durationMs,status:subject.status==="completed"?"completed":"subject_failed",...(subject.status==="completed"?{}:{failureReason:"subject failed"}),artifacts:subject.artifacts}}}}`,
   );
   await writeFile(
     specPath,

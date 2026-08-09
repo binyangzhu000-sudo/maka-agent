@@ -31,12 +31,13 @@ export {
 export { FileAttemptStore } from './attempt-store.js';
 export { parseExperimentSpec } from './spec.js';
 export {
-  createMakaRuntimeHostClient,
   createMakaSubjectAdapter,
   type CreateMakaSubjectAdapterInput,
-  type MakaRuntimeHostClient,
 } from './runtime-host-subject.js';
-export { createExternalSubjectAdapter } from './external-subject.js';
+export {
+  createExternalSubjectAdapter,
+  createLocalExternalExecution,
+} from './external-subject.js';
 export {
   createHarborExecutorAdapter,
   createPierExecutorAdapter,

@@ -14,10 +14,8 @@ const EMPTY_USAGE: NormalizedUsage = Object.freeze({
 });
 
 export function createExternalSubjectAdapter(options?: {
-  readonly environment?: NodeJS.ProcessEnv;
   readonly now?: () => number;
 }): SubjectAdapter {
-  const sourceEnvironment = options?.environment ?? process.env;
   const now = options?.now ?? Date.now;
   return {
     kind: 'external',
@@ -34,18 +32,16 @@ export function createExternalSubjectAdapter(options?: {
           repetition: String(cell.repetition),
         }),
       );
-      const environment: NodeJS.ProcessEnv = {};
-      for (const name of config.environment) {
-        const value = sourceEnvironment[name];
-        if (value !== undefined) environment[name] = value;
-      }
       const startedAt = now();
       try {
-        const processResult = await runProcess({
+        if (!context.executeExternal) {
+          throw new Error('executor did not provide an external process capability');
+        }
+        const processResult = await context.executeExternal({
           command: config.command,
           args,
           cwd: context.cwd,
-          env: environment,
+          environment: config.environment,
           signal: context.signal,
         });
         const durationMs = now() - startedAt;
@@ -188,13 +184,30 @@ function expandArgument(
     .replaceAll('{{repetition}}', replacements.repetition);
 }
 
+export function createLocalExternalExecution(sourceEnvironment: NodeJS.ProcessEnv = process.env) {
+  return (input: {
+    command: string;
+    args: readonly string[];
+    cwd: string;
+    environment: readonly string[];
+    signal?: AbortSignal;
+  }): Promise<{ exitCode: number; stdout: string }> => {
+    const environment: NodeJS.ProcessEnv = {};
+    for (const name of input.environment) {
+      const value = sourceEnvironment[name];
+      if (value !== undefined) environment[name] = value;
+    }
+    return runProcess({ ...input, env: environment });
+  };
+}
+
 function runProcess(input: {
   command: string;
   args: readonly string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
-}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+}): Promise<{ exitCode: number; stdout: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
@@ -236,7 +249,6 @@ function runProcess(input: {
       resolve({
         exitCode: code,
         stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
       });
     });
   });

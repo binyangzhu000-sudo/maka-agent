@@ -1,36 +1,35 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import {
-  createMakaSubjectAdapter,
-  type ExperimentCell,
-  type MakaRuntimeHostClient,
-} from '../index.js';
+import type {
+  EphemeralRuntimeHostExecutionInput,
+  EphemeralRuntimeHostExecutionResult,
+} from '@maka/runtime-host/client';
+import { createMakaSubjectAdapter, type ExperimentCell } from '../index.js';
 
 test('Maka subject executes one ephemeral Session through Runtime Host', async () => {
   const calls: unknown[] = [];
-  const client: MakaRuntimeHostClient = {
-    async execute(input) {
-      calls.push(input);
-      return {
-        status: 'completed',
-        executionId: input.executionId,
-        rootTurnId: input.turnId,
-        rootRunId: 'run-1',
-        usage: {
-          inputTokens: 10,
-          outputTokens: 5,
-          cacheReadTokens: 2,
-          cacheWriteTokens: 1,
-          reasoningTokens: 3,
-          totalTokens: 18,
-        },
-        costUsd: 0.02,
-      };
-    },
+  const executeMaka = async (
+    input: EphemeralRuntimeHostExecutionInput,
+  ): Promise<EphemeralRuntimeHostExecutionResult> => {
+    calls.push(input);
+    return {
+      status: 'completed',
+      executionId: input.executionId,
+      rootTurnId: input.turnId,
+      rootRunId: 'run-1',
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 1,
+        reasoningTokens: 3,
+        totalTokens: 18,
+      },
+      costUsd: 0.02,
+    };
   };
   const ids = ['session-1', 'turn-1'];
   const adapter = createMakaSubjectAdapter({
-    client,
     newId: () => ids.shift()!,
     now: (() => {
       let now = 100;
@@ -41,7 +40,7 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
 
   const result = await adapter.execute({
     cell: makaCell(),
-    context: { cwd: '/workspace', metadata: {} },
+    context: { cwd: '/workspace', metadata: {}, executeMaka },
   });
 
   assert.deepEqual(calls, [
@@ -83,29 +82,28 @@ test('Maka subject executes one ephemeral Session through Runtime Host', async (
 });
 
 test('Maka subject preserves Runtime Host failure attribution', async () => {
-  const client: MakaRuntimeHostClient = {
-    async execute(input) {
-      return {
-        status: 'failed',
-        failureReason: 'provider failed',
-        executionId: input.executionId,
-        rootTurnId: input.turnId,
-        rootRunId: 'run-1',
-        usage: {
-          inputTokens: 10,
-          outputTokens: 5,
-          cacheReadTokens: 2,
-          cacheWriteTokens: 1,
-          reasoningTokens: 3,
-          totalTokens: 18,
-        },
-        costUsd: 0.02,
-      };
-    },
+  const executeMaka = async (
+    input: EphemeralRuntimeHostExecutionInput,
+  ): Promise<EphemeralRuntimeHostExecutionResult> => {
+    return {
+      status: 'failed',
+      failureReason: 'provider failed',
+      executionId: input.executionId,
+      rootTurnId: input.turnId,
+      rootRunId: 'run-1',
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 1,
+        reasoningTokens: 3,
+        totalTokens: 18,
+      },
+      costUsd: 0.02,
+    };
   };
   const ids = ['session-1', 'turn-1'];
   const adapter = createMakaSubjectAdapter({
-    client,
     newId: () => ids.shift()!,
     now: (() => {
       let now = 100;
@@ -116,7 +114,7 @@ test('Maka subject preserves Runtime Host failure attribution', async () => {
 
   const result = await adapter.execute({
     cell: makaCell(),
-    context: { cwd: '/workspace', metadata: {} },
+    context: { cwd: '/workspace', metadata: {}, executeMaka },
   });
 
   assert.deepEqual(result, {

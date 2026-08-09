@@ -1,11 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  EphemeralRuntimeHostExecutionInput,
-  EphemeralRuntimeHostExecutionOptions,
-  EphemeralRuntimeHostExecutionResult,
-  RuntimeHostConnection,
-} from '@maka/runtime-host/client';
-import { executeEphemeralRuntimeHostSession } from '@maka/runtime-host/client';
 import type { JsonObject } from './experiment.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionResult } from './runner.js';
@@ -19,21 +12,15 @@ const EMPTY_USAGE: NormalizedUsage = Object.freeze({
   totalTokens: 0,
 });
 
-export interface MakaRuntimeHostClient {
-  execute(
-    input: EphemeralRuntimeHostExecutionInput,
-    options?: EphemeralRuntimeHostExecutionOptions,
-  ): Promise<EphemeralRuntimeHostExecutionResult>;
-}
-
 export interface CreateMakaSubjectAdapterInput {
-  readonly client: MakaRuntimeHostClient;
   readonly newId?: () => string;
   readonly now?: () => number;
   readonly pollIntervalMs?: number;
 }
 
-export function createMakaSubjectAdapter(input: CreateMakaSubjectAdapterInput): SubjectAdapter {
+export function createMakaSubjectAdapter(
+  input: CreateMakaSubjectAdapterInput = {},
+): SubjectAdapter {
   const newId = input.newId ?? randomUUID;
   const now = input.now ?? Date.now;
   const pollIntervalMs = input.pollIntervalMs ?? 25;
@@ -48,7 +35,10 @@ export function createMakaSubjectAdapter(input: CreateMakaSubjectAdapterInput): 
       const turnId = newId();
       const startedAt = now();
       try {
-        const result = await input.client.execute(
+        if (!context.executeMaka) {
+          throw new Error('executor did not provide a Runtime Host execution capability');
+        }
+        const result = await context.executeMaka(
           {
             executionId: sessionId,
             turnId,
@@ -87,14 +77,6 @@ export function createMakaSubjectAdapter(input: CreateMakaSubjectAdapterInput): 
         ]);
       }
     },
-  };
-}
-
-export function createMakaRuntimeHostClient(
-  connection: RuntimeHostConnection,
-): MakaRuntimeHostClient {
-  return {
-    execute: (input, options) => executeEphemeralRuntimeHostSession(connection, input, options),
   };
 }
 

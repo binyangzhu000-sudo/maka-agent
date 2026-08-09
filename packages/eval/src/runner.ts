@@ -10,6 +10,11 @@ import {
   type EvalResult,
   type NormalizedUsage,
 } from './result.js';
+import type {
+  EphemeralRuntimeHostExecutionInput,
+  EphemeralRuntimeHostExecutionOptions,
+  EphemeralRuntimeHostExecutionResult,
+} from '@maka/runtime-host/client';
 
 export interface SubjectExecutionResult {
   readonly output?: string;
@@ -25,6 +30,17 @@ export interface SubjectExecutionContext {
   readonly cwd: string;
   readonly metadata: JsonObject;
   readonly signal?: AbortSignal;
+  readonly executeMaka?: (
+    input: EphemeralRuntimeHostExecutionInput,
+    options?: EphemeralRuntimeHostExecutionOptions,
+  ) => Promise<EphemeralRuntimeHostExecutionResult>;
+  readonly executeExternal?: (input: {
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+    readonly environment: readonly string[];
+    readonly signal?: AbortSignal;
+  }) => Promise<{ readonly exitCode: number; readonly stdout: string }>;
 }
 
 export interface SubjectAdapter {
