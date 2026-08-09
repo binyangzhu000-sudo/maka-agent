@@ -75,8 +75,47 @@ test('an indeterminate subject still reaches executor settlement and verificatio
   );
 
   assert.equal(verified, true);
-  assert.equal(result.status, 'subject_failed');
-  assert.equal(result.score, 0);
+  assert.equal(result.status, 'indeterminate');
+  assert.equal(result.score, null);
+});
+
+test('cancellation during attempt lookup prevents cell admission', async () => {
+  const controller = new AbortController();
+  let prepared = false;
+  const store = new MemoryAttemptStore();
+  const cancellingStore: AttemptStore = {
+    list: async (cellId) => {
+      controller.abort();
+      return store.list(cellId);
+    },
+    append: (attempt) => store.append(attempt),
+    runExclusive: (operation) => store.runExclusive(operation),
+  };
+
+  await runExperiment({
+    spec: spec(),
+    store: cancellingStore,
+    signal: controller.signal,
+    executors: [
+      {
+        ...executor(),
+        async prepare() {
+          prepared = true;
+          return { cwd: '/task', metadata: {} };
+        },
+      },
+    ],
+    subjects: [
+      {
+        kind: 'external',
+        async execute() {
+          return completedSubject();
+        },
+      },
+    ],
+  });
+
+  assert.equal(prepared, false);
 });
 
 test('cancellation stops the cohort before another cell starts', async () => {

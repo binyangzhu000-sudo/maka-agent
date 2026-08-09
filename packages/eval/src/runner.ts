@@ -124,6 +124,7 @@ async function runExperimentExclusive(input: RunExperimentInput): Promise<Experi
     if (!selected.has(cell.id)) continue;
     if (input.signal?.aborted) break;
     const attempts = await input.store.list(cell.id);
+    if (input.signal?.aborted) break;
     if (selectCellResult(attempts)) continue;
     const subject = subjects.get(cell.subject.kind)!;
     const sequence = (attempts.at(-1)?.sequence ?? 0) + 1;
@@ -191,8 +192,10 @@ async function executeCell(
     });
     const cancelledByCaller = signal?.aborted === true;
     const subjectInfrastructureFailed = subject.status === 'infra_failed';
+    const uncertain =
+      cancelledByCaller || subjectInfrastructureFailed || subject.status === 'indeterminate';
     result = {
-      score: cancelledByCaller || subjectInfrastructureFailed ? null : verified.score,
+      score: uncertain ? null : verified.score,
       usage: subject.usage,
       costUsd: subject.costUsd,
       durationMs: subject.durationMs,
@@ -200,9 +203,11 @@ async function executeCell(
         ? 'indeterminate'
         : subjectInfrastructureFailed
           ? 'infra_failed'
-          : subject.status === 'failed'
-            ? 'subject_failed'
-            : verified.status,
+          : subject.status === 'indeterminate'
+            ? 'indeterminate'
+            : subject.status === 'failed'
+              ? 'subject_failed'
+              : verified.status,
       artifacts: [...subject.artifacts, ...verified.artifacts],
     };
   } catch {
