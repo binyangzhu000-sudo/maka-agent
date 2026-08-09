@@ -13,11 +13,13 @@ An Experiment combines one benchmark, one executor, all subjects, all tasks, a r
 Run a fully expanded spec through the public CLI:
 
 ```sh
-maka eval run experiment.json --out .maka-eval/run-001 --runtime-host-root /path/to/runtime-host
+maka eval run experiment.json --out .maka-eval/run-001
 ```
 
 Use `--cell <cell-id>` to replace one failed or indeterminate cell. The attempt log is append-only and result selection always uses the earliest valid attempt.
 
-Executor modules implement the `ExperimentExecutor` contract and are loaded from `executor.module` plus `executor.export`. Harbor and Pier integrations belong in such adapters; they are not separate workflows. A Maka subject uses the Runtime Host client/protocol. An external subject uses the generic command adapter.
+Executor modules implement the `ExperimentExecutor` contract and are loaded from `executor.module` plus `executor.export`. Harbor and Pier integrations belong in such adapters; they are not separate workflows. The executor prepares the task environment and supplies its execution capabilities to `runSubject`: `executeMaka` delegates one disposable execution to a Runtime Host client, while `executeExternal` runs a generic external subject in that same environment. Eval never assumes that an executor environment is the CLI process working directory.
 
-The result kernel contains only score, normalized usage, attributable cost, duration, status or failure reason, and artifacts. Specs carry every semantic setting; environment variables are reserved for credentials and machine-local paths.
+Use `createExperimentExecutorAdapter(kind, driver)` when an executor has the standard prepare → subject → verify → cleanup lifecycle. Framework-specific provisioning, Runtime Host connection details, credentials, and machine paths remain in the executor adapter; they are not Eval semantics.
+
+The result kernel contains only score, normalized usage, attributable cost, duration, status, and artifacts. Specs carry every semantic setting; environment variables are reserved for credentials and machine-local paths.
