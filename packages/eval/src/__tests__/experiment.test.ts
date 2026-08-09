@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   expandExperiment,
-  InMemoryAttemptStore,
   parseExperimentSpec,
   runExperiment,
   selectCellResult,
@@ -10,6 +9,7 @@ import {
   type EvalResult,
   type ExperimentExecutor,
   type ExperimentSpec,
+  type AttemptStore,
 } from '../index.js';
 
 describe('experiment cells', () => {
@@ -249,6 +249,28 @@ function attempt(sequence: number, status: CellAttempt['result']['status']): Cel
       artifacts: [],
     },
   };
+}
+
+class InMemoryAttemptStore implements AttemptStore {
+  readonly #attempts: CellAttempt[];
+
+  constructor(attempts: readonly CellAttempt[] = []) {
+    this.#attempts = [...attempts];
+  }
+
+  async list(cellId: string): Promise<readonly CellAttempt[]> {
+    return this.#attempts
+      .filter((candidate) => candidate.cellId === cellId)
+      .sort((left, right) => left.sequence - right.sequence);
+  }
+
+  async append(value: CellAttempt): Promise<void> {
+    this.#attempts.push(value);
+  }
+
+  runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    return operation();
+  }
 }
 
 function oneCellSpec(): ExperimentSpec {

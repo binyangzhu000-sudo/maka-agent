@@ -64,35 +64,6 @@ export interface ExperimentRunResult {
   readonly replaceableCellIds: readonly string[];
 }
 
-export class InMemoryAttemptStore implements AttemptStore {
-  readonly #attempts: CellAttempt[];
-
-  constructor(attempts: readonly CellAttempt[] = []) {
-    this.#attempts = [...attempts];
-  }
-
-  async list(cellId: string): Promise<readonly CellAttempt[]> {
-    return this.#attempts
-      .filter((attempt) => attempt.cellId === cellId)
-      .sort((left, right) => left.sequence - right.sequence);
-  }
-
-  async append(attempt: CellAttempt): Promise<void> {
-    const attempts = await this.list(attempt.cellId);
-    const expected = (attempts.at(-1)?.sequence ?? 0) + 1;
-    if (attempt.sequence !== expected) {
-      throw new Error(
-        `attempt ${attempt.cellId}#${attempt.sequence} is not the next immutable sequence ${expected}`,
-      );
-    }
-    this.#attempts.push(attempt);
-  }
-
-  runExclusive<T>(operation: () => Promise<T>): Promise<T> {
-    return operation();
-  }
-}
-
 export async function runExperiment(input: RunExperimentInput): Promise<ExperimentRunResult> {
   return input.store.runExclusive(() => runExperimentExclusive(input));
 }

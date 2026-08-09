@@ -19,7 +19,6 @@ export {
   type NormalizedUsage,
 } from './result.js';
 export {
-  InMemoryAttemptStore,
   runExperiment,
   type AttemptStore,
   type ExperimentExecutor,
