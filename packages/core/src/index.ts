@@ -224,12 +224,11 @@ export {
   workspaceAuthorityIdentity,
 } from './workspace-version-authority.js';
 
-// execution-evidence.ts — shared cross-ledger identity and source coverage.
+// execution-evidence.ts — shared Runtime identity and source coverage.
 // This contract references canonical facts; it does not create another fact
 // authority. Subpath `@maka/core/execution-evidence` is preferred.
 export type {
   ExecutionIdentityRef,
-  TaskIdentityRef,
   ExecutionLogCursor,
   ExecutionLogCoverage,
   WorkspaceRevisionRef,

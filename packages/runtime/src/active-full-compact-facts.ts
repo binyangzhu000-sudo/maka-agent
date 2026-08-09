@@ -48,8 +48,8 @@ const PROCESS_FACT_PATTERN =
 const VM_FACT_PATTERN =
   /\b(vm|guest|boot|booted|login|kernel|panic|mount|reachable|refused|guest ip|hostfwd)\b/i;
 const OUTCOME_FACT_PATTERN =
-  /\b(exit code|exit=|status|failed|failure|error|timeout|assert|missing|listening|pid|port|reachable|refused|boot|login|self-check)\b/i;
-const VERIFIER_CONTEXT_PATTERN = /\b(verifier|self-check|self check|test|assert|check)\b/i;
+  /\b(exit code|exit=|status|failed|failure|error|timeout|assert|missing|listening|pid|port|reachable|refused|boot|login)\b/i;
+const VERIFIER_CONTEXT_PATTERN = /\b(verifier|test|assert|check)\b/i;
 const FAILURE_PATTERN = /\b(fail|failed|failure|error|assert|expected|missing|timeout|red)\b/i;
 const CONSTRAINT_PATTERN =
   /\b(constraint|do not|must|only|without|avoid|no hidden|no task-specific|preserve|keep)\b/i;
@@ -372,7 +372,6 @@ function splitCandidateLines(text: string): string[] {
         line.length > 0 &&
         line.length <= 1000 &&
         !isPlaceholderMetadataLine(line) &&
-        !isTaskRunMetadataLine(line) &&
         !isLowSignalRawLogLine(line),
     );
 }
@@ -400,26 +399,6 @@ function isPlaceholderMetadataLine(line: string): boolean {
   );
 }
 
-function isTaskRunMetadataLine(line: string): boolean {
-  const normalized = line.toLowerCase();
-  if (/\btask_run_(created|queued|started|updated|completed|failed|cancelled)\b/.test(normalized))
-    return true;
-  if (
-    /\b(taskrunid|task_run_id|runtimeeventid|runtime_event_id|invocationid|invocation_id)\b/.test(
-      normalized,
-    )
-  ) {
-    return !containsOperationalSignal(normalized);
-  }
-  if (
-    /["'](?:sessionid|session_id|turnid|turn_id|runid|run_id)["']?\s*[:=]/i.test(line) &&
-    /["'](?:status|taxonomy|event|type|createdat|created_at)["']?\s*[:=]/i.test(line)
-  ) {
-    return !containsOperationalSignal(normalized);
-  }
-  return false;
-}
-
 function isLowSignalRawLogLine(line: string): boolean {
   return (
     /\b(noise|spam|debug spam)\b/i.test(line) ||
@@ -428,22 +407,11 @@ function isLowSignalRawLogLine(line: string): boolean {
   );
 }
 
-function containsOperationalSignal(normalizedLine: string): boolean {
-  return (
-    /\b(command|cmd|qemu|xorriso|mount|boot|kernel|initramfs|ssh|sshd|port|pid|exit code|failure|failed|timeout)\b/.test(
-      normalizedLine,
-    ) || /(?:^|[\s"'])\/(?:app|boot|tmp|workspace|etc|var)\//.test(normalizedLine)
-  );
-}
-
 function isLowSignalInternalPath(path: string): boolean {
   return (
-    /\/maka-task-run\//.test(path) ||
     /\/runs\/sessions\//.test(path) ||
-    /\/exports\/harbor-/.test(path) ||
     /\/runtime-events\.jsonl$/.test(path) ||
     /\/events\.jsonl$/.test(path) ||
-    /\/task-run\.json$/.test(path) ||
     /\/result\.json$/.test(path)
   );
 }

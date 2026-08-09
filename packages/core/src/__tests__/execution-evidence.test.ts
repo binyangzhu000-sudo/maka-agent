@@ -11,7 +11,7 @@ import {
 } from '../execution-evidence.js';
 
 describe('execution evidence spine contract', () => {
-  it('accepts a complete cross-ledger reference', () => {
+  it('accepts a complete Runtime evidence reference', () => {
     const ref: ExecutionEvidenceRef = {
       schemaVersion: EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
       execution: {
@@ -20,18 +20,10 @@ describe('execution evidence spine contract', () => {
         agentRunId: 'run-1',
         turnId: 'turn-1',
       },
-      task: {
-        taskRunId: 'task-run-1',
-        attemptId: 'attempt-2',
-      },
       runtimeCoverage: {
         lowWater: runtimeCursor(4, 'event-4'),
         highWater: runtimeCursor(12, 'event-12'),
         eventCount: 9,
-      },
-      taskCoverage: {
-        highWater: taskCursor(7, 'task-event-7'),
-        eventCount: 8,
       },
       workspace: {
         kind: 'workspace_snapshot',
@@ -52,23 +44,32 @@ describe('execution evidence spine contract', () => {
       schemaVersion: EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
       execution: { sessionId: 'session-1' },
     };
-    const taskOnly = {
-      schemaVersion: EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
-      task: { taskRunId: 'task-run-1' },
-    };
-
     assert.equal(validateExecutionEvidenceRef(executionOnly).ok, true);
-    assert.equal(validateExecutionEvidenceRef(taskOnly).ok, true);
   });
 
-  it('requires an execution or task identity lane', () => {
+  it('requires a Runtime execution identity', () => {
     const result = validateExecutionEvidenceRef({
       schemaVersion: EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
       target: { snapshotId: 'snapshot-1' },
     });
 
     assert.equal(result.ok, false);
-    if (!result.ok) assert(result.errors.some((error) => error.path === 'ref'));
+    if (!result.ok) assert(result.errors.some((error) => error.path === 'execution'));
+  });
+
+  it('rejects removed TaskRun evidence lanes', () => {
+    const result = validateExecutionEvidenceRef({
+      schemaVersion: EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
+      execution: { sessionId: 'session-1' },
+      task: { taskRunId: 'legacy-task-run' },
+      taskCoverage: { highWater: { ledger: 'task_event', streamId: 'legacy', sequence: 0 } },
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert(result.errors.some((error) => error.path === 'task'));
+      assert(result.errors.some((error) => error.path === 'taskCoverage'));
+    }
   });
 
   it('rejects malformed ids, schema versions, cursors, and revision refs', () => {
@@ -135,19 +136,16 @@ describe('execution evidence spine contract', () => {
     assert.equal(conflict.ok, false);
   });
 
-  it('binds Runtime and Task coverage streams to known run identities', () => {
+  it('binds Runtime coverage streams to known run identities', () => {
     const result = validateExecutionEvidenceRef({
       schemaVersion: EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
       execution: { sessionId: 'session-1', agentRunId: 'run-expected' },
-      task: { taskRunId: 'task-run-expected' },
       runtimeCoverage: { highWater: runtimeCursor(1, 'event-1') },
-      taskCoverage: { highWater: taskCursor(1, 'task-event-1') },
     });
 
     assert.equal(result.ok, false);
     if (!result.ok) {
       assert(result.errors.some((error) => error.path === 'runtimeCoverage.highWater.streamId'));
-      assert(result.errors.some((error) => error.path === 'taskCoverage.highWater.streamId'));
     }
   });
 
@@ -167,7 +165,6 @@ describe('execution evidence spine contract', () => {
       compareExecutionLogCursors(first, { ...first, streamId: 'run-2' }),
       'incomparable',
     );
-    assert.equal(compareExecutionLogCursors(first, taskCursor(1, 'task-event-1')), 'incomparable');
     assert.equal(
       compareExecutionLogCursors(first, {
         ...first,
@@ -182,15 +179,6 @@ function runtimeCursor(sequence: number, eventId?: string): ExecutionLogCursor {
   return {
     ledger: 'runtime_event',
     streamId: 'run-1',
-    sequence,
-    ...(eventId ? { eventId } : {}),
-  };
-}
-
-function taskCursor(sequence: number, eventId?: string): ExecutionLogCursor {
-  return {
-    ledger: 'task_event',
-    streamId: 'task-run-1',
     sequence,
     ...(eventId ? { eventId } : {}),
   };

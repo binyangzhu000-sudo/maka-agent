@@ -1,19 +1,14 @@
 /**
- * Shared identity and source-coverage contract for cross-ledger evidence.
+ * Shared identity and source-coverage contract for Runtime execution evidence.
  *
- * This module does not change Runtime or Task persistence. It gives later
- * integration phases one vocabulary for describing which execution, task,
- * log prefix, workspace revision, and target snapshot support a projection or
- * evidence claim.
+ * This module does not change Runtime persistence. It gives callers one
+ * vocabulary for describing which execution, log prefix, workspace revision,
+ * and target snapshot support a projection or evidence claim.
  */
 
 export const EXECUTION_EVIDENCE_REF_SCHEMA_VERSION = 'maka.execution_evidence_ref.v1' as const;
 
-export const EXECUTION_LOG_LEDGERS = [
-  'runtime_event',
-  'runtime_event_projection',
-  'task_event',
-] as const;
+export const EXECUTION_LOG_LEDGERS = ['runtime_event', 'runtime_event_projection'] as const;
 export type ExecutionLogLedger = (typeof EXECUTION_LOG_LEDGERS)[number];
 
 export const WORKSPACE_REVISION_KINDS = [
@@ -28,8 +23,7 @@ export type WorkspaceRevisionKind = (typeof WORKSPACE_REVISION_KINDS)[number];
  * Runtime identity lane.
  *
  * `invocationId` is the existing durable Runtime spine id. `agentRunId` maps
- * to `AgentRunHeader.runId` and `RuntimeEvent.runId`; the longer field name
- * avoids confusing an AgentRun with a TaskRun at cross-ledger boundaries.
+ * to `AgentRunHeader.runId` and `RuntimeEvent.runId`.
  *
  * Only `sessionId` is required so callers can represent partial knowledge
  * without inventing child identities.
@@ -41,17 +35,11 @@ export interface ExecutionIdentityRef {
   turnId?: string;
 }
 
-/** Task identity lane. `attemptId` is meaningful only inside `taskRunId`. */
-export interface TaskIdentityRef {
-  taskRunId: string;
-  attemptId?: string;
-}
-
 /**
  * Ordered position in one log or explicitly versioned projection stream.
  *
  * `sequence` is the zero-based append ordinal within (`ledger`, `streamId`).
- * For canonical Runtime/Task ledgers it is the append ordinal. A
+ * For canonical Runtime ledgers it is the append ordinal. A
  * `runtime_event_projection` owner MUST publish the ordering/filter policy
  * beside the cursor. `sequence` is the only ordering field; `eventId` is an
  * optional audit/dedup pointer and MUST NOT be used to order events. Cursors
@@ -84,18 +72,16 @@ export interface TargetSnapshotRef {
 }
 
 /**
- * Versioned cross-ledger source reference.
+ * Versioned Runtime source reference.
  *
  * This is a reference to facts, not a new fact authority. At least one of the
- * Runtime or Task identity lanes is required. Every other field is optional so
- * old data and partially observed executions can be represented honestly.
+ * A Runtime identity is required. Every other field is optional so partially
+ * observed executions can be represented honestly.
  */
 export interface ExecutionEvidenceRef {
   schemaVersion: typeof EXECUTION_EVIDENCE_REF_SCHEMA_VERSION;
-  execution?: ExecutionIdentityRef;
-  task?: TaskIdentityRef;
+  execution: ExecutionIdentityRef;
   runtimeCoverage?: ExecutionLogCoverage;
-  taskCoverage?: ExecutionLogCoverage;
   workspace?: WorkspaceRevisionRef;
   target?: TargetSnapshotRef;
 }
@@ -145,6 +131,17 @@ export function validateExecutionEvidenceRef(value: unknown): ExecutionEvidenceV
   const errors: ExecutionEvidenceValidationIssue[] = [];
   if (!isRecord(value)) return invalid('ref', 'expected an object');
 
+  const allowedKeys = new Set([
+    'schemaVersion',
+    'execution',
+    'runtimeCoverage',
+    'workspace',
+    'target',
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) errors.push({ path: key, message: 'unexpected field' });
+  }
+
   if (value.schemaVersion !== EXECUTION_EVIDENCE_REF_SCHEMA_VERSION) {
     errors.push({
       path: 'schemaVersion',
@@ -153,10 +150,7 @@ export function validateExecutionEvidenceRef(value: unknown): ExecutionEvidenceV
   }
 
   const execution = validateExecutionIdentity(value.execution, errors);
-  const task = validateTaskIdentity(value.task, errors);
-  if (!execution && !task) {
-    errors.push({ path: 'ref', message: 'expected at least one execution or task identity lane' });
-  }
+  if (!execution) errors.push({ path: 'execution', message: 'expected a Runtime identity' });
 
   const runtimeCoverage = validateCoverage(
     value.runtimeCoverage,
@@ -164,8 +158,6 @@ export function validateExecutionEvidenceRef(value: unknown): ExecutionEvidenceV
     'runtime_event',
     errors,
   );
-  const taskCoverage = validateCoverage(value.taskCoverage, 'taskCoverage', 'task_event', errors);
-
   if (
     execution?.agentRunId &&
     runtimeCoverage &&
@@ -176,13 +168,6 @@ export function validateExecutionEvidenceRef(value: unknown): ExecutionEvidenceV
       message: 'expected streamId to match execution.agentRunId',
     });
   }
-  if (task?.taskRunId && taskCoverage && taskCoverage.highWater.streamId !== task.taskRunId) {
-    errors.push({
-      path: 'taskCoverage.highWater.streamId',
-      message: 'expected streamId to match task.taskRunId',
-    });
-  }
-
   validateWorkspaceRevision(value.workspace, errors);
   validateTargetSnapshot(value.target, errors);
 
@@ -209,20 +194,6 @@ function validateExecutionIdentity(
   optionalNonEmptyString(value.agentRunId, 'execution.agentRunId', errors);
   optionalNonEmptyString(value.turnId, 'execution.turnId', errors);
   return value as unknown as ExecutionIdentityRef;
-}
-
-function validateTaskIdentity(
-  value: unknown,
-  errors: ExecutionEvidenceValidationIssue[],
-): TaskIdentityRef | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    errors.push({ path: 'task', message: 'expected an object' });
-    return undefined;
-  }
-  requireNonEmptyString(value.taskRunId, 'task.taskRunId', errors);
-  optionalNonEmptyString(value.attemptId, 'task.attemptId', errors);
-  return value as unknown as TaskIdentityRef;
 }
 
 function validateCoverage(
