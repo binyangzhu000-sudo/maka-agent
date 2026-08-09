@@ -46,6 +46,7 @@ export interface ExperimentExecutor {
 export interface AttemptStore {
   list(cellId: string): Promise<readonly CellAttempt[]>;
   append(attempt: CellAttempt): Promise<void>;
+  runExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export interface RunExperimentInput {
@@ -85,9 +86,17 @@ export class InMemoryAttemptStore implements AttemptStore {
     }
     this.#attempts.push(attempt);
   }
+
+  runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    return operation();
+  }
 }
 
 export async function runExperiment(input: RunExperimentInput): Promise<ExperimentRunResult> {
+  return input.store.runExclusive(() => runExperimentExclusive(input));
+}
+
+async function runExperimentExclusive(input: RunExperimentInput): Promise<ExperimentRunResult> {
   const cells = expandExperiment(input.spec);
   const selected = input.cellIds ? new Set(input.cellIds) : new Set(cells.map((cell) => cell.id));
   const knownCellIds = new Set(cells.map((cell) => cell.id));

@@ -10,7 +10,7 @@ test('experiment directory refuses a different spec after its authority is froze
   const first = spec('model-a');
   const opened = await openExperimentDirectory(root, first);
 
-  assert.equal(opened.attempts.path, join(root, 'attempts.jsonl'));
+  assert.equal(opened.attempts.path, join(root, 'attempts'));
   await openExperimentDirectory(root, first);
   await assert.rejects(openExperimentDirectory(root, spec('model-b')), /different experiment spec/);
 });

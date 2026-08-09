@@ -132,7 +132,7 @@ function jsonObject(value: unknown, where: string): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${where} must be an object`);
   }
-  const result: Record<string, JsonValue> = {};
+  const result = Object.create(null) as Record<string, JsonValue>;
   for (const [key, child] of Object.entries(value))
     result[key] = jsonValue(child, `${where}.${key}`);
   return result;

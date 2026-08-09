@@ -1,5 +1,6 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { JsonObject } from './experiment.js';
 import type { CellAttempt, EvalResultStatus, NormalizedUsage } from './result.js';
 import type { AttemptStore } from './runner.js';
@@ -7,11 +8,41 @@ import type { AttemptStore } from './runner.js';
 export class FileAttemptStore implements AttemptStore {
   constructor(readonly path: string) {}
 
+  async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    await mkdir(this.path, { recursive: true });
+    const lockPath = join(this.path, '.writer.lock');
+    await acquireLock(lockPath);
+    try {
+      return await operation();
+    } finally {
+      await unlink(lockPath);
+    }
+  }
+
   async list(cellId: string): Promise<readonly CellAttempt[]> {
-    const attempts = await this.#readAll();
-    return attempts
-      .filter((attempt) => attempt.cellId === cellId)
-      .sort((left, right) => left.sequence - right.sequence);
+    const directory = this.#cellDirectory(cellId);
+    let names: string[];
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    const attempts = [];
+    for (const name of names.sort()) {
+      const match = /^(\d{6})\.json$/.exec(name);
+      if (!match) continue;
+      const sequence = Number(match[1]);
+      const attempt = decodeCellAttempt(
+        JSON.parse(await readFile(join(directory, name), 'utf8')) as unknown,
+        join(directory, name),
+      );
+      if (attempt.cellId !== cellId || attempt.sequence !== sequence) {
+        throw new Error(`${join(directory, name)} does not match its immutable identity`);
+      }
+      attempts.push(attempt);
+    }
+    return attempts;
   }
 
   async append(attempt: CellAttempt): Promise<void> {
@@ -23,33 +54,59 @@ export class FileAttemptStore implements AttemptStore {
         `attempt ${canonical.cellId}#${canonical.sequence} is not the next immutable sequence ${expected}`,
       );
     }
-    await mkdir(dirname(this.path), { recursive: true });
-    await appendFile(this.path, `${JSON.stringify(canonical)}\n`, 'utf8');
-  }
-
-  async #readAll(): Promise<CellAttempt[]> {
-    let text: string;
+    const directory = this.#cellDirectory(canonical.cellId);
+    await mkdir(directory, { recursive: true });
+    const recordPath = join(directory, `${String(canonical.sequence).padStart(6, '0')}.json`);
     try {
-      text = await readFile(this.path, 'utf8');
+      await writeFile(recordPath, `${JSON.stringify(canonical)}\n`, {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new Error(
+          `attempt ${canonical.cellId}#${canonical.sequence} already exists and is immutable`,
+        );
+      }
       throw error;
     }
-    if (text.length > 0 && !text.endsWith('\n')) {
-      throw new Error(`${this.path}: attempts log has an incomplete final record`);
-    }
-    return text
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line, index) => {
-        let value: unknown;
-        try {
-          value = JSON.parse(line) as unknown;
-        } catch (error) {
-          throw new Error(`${this.path}:${index + 1}: invalid JSON: ${errorMessage(error)}`);
-        }
-        return decodeCellAttempt(value, `${this.path}:${index + 1}`);
+  }
+
+  #cellDirectory(cellId: string): string {
+    return join(this.path, createHash('sha256').update(cellId).digest('hex'));
+  }
+}
+
+async function acquireLock(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await writeFile(path, `${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`, {
+        encoding: 'utf8',
+        flag: 'wx',
       });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (attempt === 0 && (await removeStaleLock(path))) continue;
+      throw new Error(`${path}: experiment already has an active writer`);
+    }
+  }
+}
+
+async function removeStaleLock(path: string): Promise<boolean> {
+  try {
+    const value = JSON.parse(await readFile(path, 'utf8')) as { pid?: unknown };
+    if (!Number.isSafeInteger(value.pid) || (value.pid as number) < 1) return false;
+    try {
+      process.kill(value.pid as number, 0);
+      return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return false;
+      await unlink(path);
+      return true;
+    }
+  } catch {
+    return false;
   }
 }
 

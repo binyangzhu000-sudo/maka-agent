@@ -108,6 +108,19 @@ describe('experiment cells', () => {
       /repetitions/,
     );
   });
+
+  test('preserves every JSON key in the frozen semantic authority', () => {
+    const parsed = parseExperimentSpec(
+      JSON.parse(
+        '{"schemaVersion":"maka.eval.v1","id":"prototype","benchmark":{"id":"bench","version":"1","config":{"__proto__":{"mode":"strict"}}},"executor":{"kind":"harbor","config":{}},"subjects":[{"id":"external","kind":"external","config":{}}],"tasks":[{"id":"task","input":"task","config":{}}],"repetitions":1,"budget":{},"verifier":{}}',
+      ),
+    );
+
+    assert.equal(Object.hasOwn(parsed.benchmark.config, '__proto__'), true);
+    assert.equal((parsed.benchmark.config.__proto__ as { mode: string }).mode, 'strict');
+    assert.equal(Object.getPrototypeOf(parsed.benchmark.config), null);
+    assert.equal(Object.isFrozen(parsed.benchmark.config), true);
+  });
 });
 
 describe('cell attempts', () => {
