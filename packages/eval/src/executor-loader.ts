@@ -1,4 +1,4 @@
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { ExperimentSpec, JsonObject } from './experiment.js';
 import type { ExperimentExecutor } from './runner.js';
@@ -62,5 +62,5 @@ function decodeLoaderConfig(config: JsonObject): {
 }
 
 function isRelativeOrAbsolutePath(value: string): boolean {
-  return value.startsWith('.') || value.startsWith('/');
+  return value.startsWith('.') || isAbsolute(value);
 }

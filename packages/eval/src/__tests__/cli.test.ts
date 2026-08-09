@@ -127,6 +127,57 @@ test('maka eval runs Maka variants and a competitor through one declarative coho
   );
 });
 
+test('maka eval public path loads a declared executor and runs a real external subject', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-public-cli-'));
+  const specPath = join(root, 'experiment.json');
+  const modulePath = join(root, 'executor.mjs');
+  const out = join(root, 'out');
+  await writeFile(
+    modulePath,
+    'export function createExecutor(){return{kind:"harbor",async execute({runSubject}){const subject=await runSubject({cwd:process.cwd(),metadata:{}});return{score:subject.status==="completed"?1:null,usage:subject.usage,costUsd:subject.costUsd,durationMs:subject.durationMs,status:subject.status==="completed"?"completed":"subject_failed",...(subject.status==="completed"?{}:{failureReason:"subject failed"}),artifacts:subject.artifacts}}}}',
+  );
+  await writeFile(
+    specPath,
+    JSON.stringify({
+      schemaVersion: 'maka.eval.v1',
+      id: 'public-path',
+      benchmark: { id: 'bench', version: '1', config: {} },
+      executor: {
+        kind: 'harbor',
+        config: { module: './executor.mjs', export: 'createExecutor', options: {} },
+      },
+      subjects: [
+        {
+          id: 'external',
+          kind: 'external',
+          config: {
+            command: process.execPath,
+            args: [
+              '-e',
+              'process.stdout.write(JSON.stringify({schemaVersion:"maka.external_subject_result.v1",output:"done",usage:{inputTokens:1,outputTokens:1,cacheReadTokens:0,cacheWriteTokens:0,reasoningTokens:0,totalTokens:2},costUsd:0.01,artifacts:[]}))',
+            ],
+            environment: [],
+          },
+        },
+      ],
+      tasks: [{ id: 'task', input: 'Solve it', config: {} }],
+      repetitions: 1,
+      budget: {},
+      verifier: {},
+    }),
+  );
+
+  const code = await runMakaEvalCli(['run', specPath, '--out', out], {
+    writeOut: () => {},
+    writeError: () => {},
+  });
+
+  assert.equal(code, 0);
+  const results = JSON.parse(await readFile(join(out, 'results.json'), 'utf8'));
+  assert.equal(results.cells[0].attempt.result.score, 1);
+  assert.equal(results.cells[0].attempt.result.usage.totalTokens, 2);
+});
+
 function makaConfig(orchestrationMode: 'default' | 'graph') {
   return {
     connectionSlug: 'deepseek',
