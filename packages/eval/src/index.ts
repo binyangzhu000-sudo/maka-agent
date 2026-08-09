@@ -48,3 +48,9 @@ export {
   openExperimentDirectory,
   type ExperimentDirectory,
 } from './experiment-directory.js';
+export {
+  loadExperimentExecutor,
+  type ExperimentExecutorFactory,
+  type ExperimentExecutorFactoryInput,
+} from './executor-loader.js';
+export { runMakaEvalCli, type RunMakaEvalCliDeps } from './cli.js';
