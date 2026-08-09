@@ -24,7 +24,7 @@ const TYPECHECK_ONLY_FILES = new Set([
   'tsconfig.lib.json',
 ]);
 
-const DEDICATED_WORKSPACE_LANES = new Set(['packages/runtime-host', 'packages/headless']);
+const DEDICATED_WORKSPACE_LANES = new Set(['packages/runtime-host']);
 
 // Scripts the Electron e2e job runs. Editing one of these changes what that
 // job verifies, so it has to re-run — a unit test on the runner is not
@@ -104,8 +104,6 @@ const EXTENDED_SCRIPT_FILES = new Set([
   'scripts/cu-real-model-launcher.mjs',
   'scripts/cu-real-model-launcher.test.mjs',
   'scripts/macos-arm64-release.test.mjs',
-  'scripts/measure-session-bundle.mjs',
-  'scripts/measure-session-bundle.test.mjs',
   'scripts/package-macos-arm64.mjs',
   'scripts/npm-spawn.mjs',
   'scripts/package-windows-x64.mjs',
@@ -194,7 +192,6 @@ export function reverseDependencyClosure(seedDirs, graph) {
 
 function workspaceLanes(workspaces) {
   return {
-    headless: workspaces.includes('packages/headless'),
     runtimeHost: workspaces.includes('packages/runtime-host'),
     standardWorkspaces: workspaces.filter((dir) => !DEDICATED_WORKSPACE_LANES.has(dir)),
   };
@@ -307,7 +304,6 @@ export function formatGitHubOutputs(plan) {
     `code=${plan.code}`,
     `e2e=${plan.e2e}`,
     `full=${plan.full}`,
-    `headless=${plan.headless}`,
     `runtime_host=${plan.runtimeHost}`,
     `runtime_sandbox=${plan.runtimeSandbox}`,
     `script_mode=${plan.scriptMode}`,

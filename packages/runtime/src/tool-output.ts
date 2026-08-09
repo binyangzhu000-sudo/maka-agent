@@ -9,13 +9,10 @@
 // to a line/byte budget, keeps the most useful slice, and tells the model the
 // output was cut and how to recover the rest.
 //
-// We deliberately do NOT spill the full output to a host-side file the way
-// opencode does: the benchmark Bash path runs through an isolated executor that
-// abstracts the filesystem away, so there is no shared location the host can
-// write and the model can later read. Instead the truncation marker points the
-// model at the portable recovery it can perform itself — re-run the command
-// (only when it is safe to repeat) redirecting to a file, then Read/Grep that
-// file; otherwise work from the kept window.
+// This helper does not own a spill-file lifecycle. Instead the truncation
+// marker points the model at portable recovery — re-run the command (only when
+// it is safe to repeat) redirecting to a file, then Read/Grep that file;
+// otherwise work from the kept window.
 //
 // Adapted from opencode's truncate.output() (packages/opencode/src/tool/
 // truncate.ts): same byte+line budget and head/tail windowing, minus the file

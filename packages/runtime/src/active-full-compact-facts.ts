@@ -104,7 +104,7 @@ export function buildActiveFullCompactFactSummary(input: {
   const text = boundedSummaryText(
     [
       hasProcessFacts
-        ? 'Earlier active provider messages were compacted into deterministic benchmark/process state.'
+        ? 'Earlier active provider messages were compacted into deterministic process state.'
         : 'Earlier active provider messages were compacted; only source and coverage metadata was extractable.',
       `Covered ${providerMessages.length} provider messages, ${entries.length} source entries, ${runtimeEvents.length} runtime events, ${toolCalls.length} tool calls, ${archiveRefs.length} archive refs.`,
       'Raw covered payloads were replaced in the provider request while source/archive refs preserve evidence.',

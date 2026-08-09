@@ -52,13 +52,13 @@ All production `AiSdkBackend` composition roots use the same
 | Desktop | persisted `webSearch.enabled/defaultProvider` settings | May add provider-native `WebSearch` |
 | CLI / TUI / `maka run` | the same persisted settings | May add provider-native `WebSearch` |
 | Runtime Host | runtime-policy web-search settings | May add provider-native `WebSearch` |
-| Headless Harbor | explicit `MAKA_WEB_SEARCH_ENABLED=true` | May add provider-native `WebSearch` |
+| Eval Maka subject | Runtime Host policy | Inherits the exact hosted tool surface |
 
-Headless remains opt-in because silently enabling network search would change
-benchmark semantics and historical baselines. Merely speaking Anthropic
-Messages is not enough to infer hosted-search support; Maka uses explicit model
-metadata or narrow model-id rules, including DeepSeek V4 Flash on an
-`anthropic-compatible` connection.
+Eval does not add or remove Runtime tools. An Experiment may compare subject
+configurations, but the Maka subject's effective WebSearch authority comes from
+Runtime Host. Merely speaking Anthropic Messages is not enough to infer
+hosted-search support; Maka uses explicit model metadata or narrow model-id
+rules, including DeepSeek V4 Flash on an `anthropic-compatible` connection.
 
 An explicit `BackendFactoryContext.tools` list is a hard ceiling. Root surfaces
 may add native search, but scoped child agents do not gain it unless their
@@ -116,12 +116,12 @@ Full production-surface smoke verification on 2026-08-04 then ran:
 
 - `maka run` through a persisted DeepSeek Responses connection;
 - `maka run` through a persisted DeepSeek Anthropic-compatible connection;
-- Headless Harbor with Responses and `MAKA_WEB_SEARCH_ENABLED=true`;
-- Headless Harbor with Anthropic Messages and the same explicit opt-in.
+- Runtime Host with a Responses-backed subject;
+- Runtime Host with an Anthropic Messages-backed subject.
 
 All four runs completed with provider-executed WebSearch call/result pairs,
 final model text, no local ToolRuntime execution of `WebSearch`, and durable
-runtime events. Both headless runs also persisted token summaries. The
+runtime events. Both hosted runs also persisted token summaries. The
 Responses CLI turn emitted search plus page-open actions; the Anthropic CLI
 turn returned ten structured source rows.
 

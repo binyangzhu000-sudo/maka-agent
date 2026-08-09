@@ -12,16 +12,16 @@ Maka 是一个 local-first AI agent runtime 和 workspace。它使用 append-onl
 
 h2. 项目说明（Proposal）
 
-Maka 提供一个统一的 execution runtime，供 desktop application、terminal TUI、non-interactive CLI 和 headless task runner 共同使用。其设计将持久化的 execution fact 与临时发送给 model 的 context 分离。
+Maka 提供一个由 Runtime Host 统一拥有的 execution runtime，供 desktop application、terminal TUI、non-interactive CLI 和 Eval client 共同使用。其设计将持久化的 execution fact 与临时发送给 model 的 context 分离。
 
 Maka 提供以下能力：
 
 * *Append-only execution record。* Model message、tool call、tool result、permission decision 和 termination event 会先持久化，再被投影为面向用户的状态。
 * *可重建的状态。* Session、active context、UI state 和 recovery decision 均从 event log 派生，而不是分别维护为彼此独立的事实来源。
 * *不删除历史记录的 context management。* Tool-result pruning 和 LLM compaction 可以减少下一次 inference 使用的 context，同时完整保留原始 execution record。
-* *跨越单个 turn 的 durable work。* Headless runner 为每个 task 提供独立的 identity、event log、budget、permission pause、continuation 和 resume 行为。
+* *跨越单个 turn 的 durable work。* Runtime Host 为每个 Session 和 Turn 提供独立的 identity、event log、permission pause、continuation 和 resume 行为。
 * *基于证据的完成判定。* Runtime 会将 model 声称“工作已完成”与经过验证的 process 和 tool outcome 分开记录。
-* *一个 runtime，多种使用界面。* Maka 提供 Electron desktop application、terminal TUI、non-interactive CLI 和 headless runner。
+* *一个 runtime，多种使用界面。* Maka 提供 Electron desktop application、terminal TUI、non-interactive CLI，以及只通过 Runtime Host 执行 Maka subject 的 Eval client。
 
 Maka 主要使用 TypeScript 编写，运行于 Node.js。默认情况下，session、setting、credential 和 run record 都保留在用户本地设备上。
 
