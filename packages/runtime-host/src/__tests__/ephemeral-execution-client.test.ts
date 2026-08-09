@@ -104,6 +104,20 @@ test('ephemeral execution never reconciles a deterministic Session identity conf
   assert.deepEqual(operations, ['session.create']);
 });
 
+test('pre-cancelled ephemeral execution has no Runtime Host side effects', async () => {
+  const operations: string[] = [];
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    executeEphemeralRuntimeHostSession(connectionStub({ operations }), executionInput(), {
+      signal: controller.signal,
+    }),
+    { name: 'AbortError' },
+  );
+  assert.deepEqual(operations, []);
+});
+
 test('ephemeral execution reports incomplete usage provenance without discarding visible usage', async () => {
   const connection = connectionStub({
     operations: [],
@@ -132,7 +146,7 @@ test('ephemeral execution reports incomplete usage provenance without discarding
 test('cancelled ephemeral execution asks Host to stop the whole Session before retirement', async () => {
   const operations: string[] = [];
   const controller = new AbortController();
-  controller.abort();
+  let queries = 0;
   const connection = connectionStub({
     operations,
     request(operation) {
@@ -145,14 +159,26 @@ test('cancelled ephemeral execution asks Host to stop the whole Session before r
         return { kind: 'removed', sessionId: 'execution-1' };
       }
     },
-    queryTurn: async () => ({
-      sessionId: 'execution-1',
-      turnId: 'root-turn',
-      runId: 'root-run',
-      status: 'cancelled',
-      terminalEventId: 'terminal',
-      abortSource: 'stop_button',
-    }),
+    queryTurn: async () => {
+      queries += 1;
+      if (queries === 1) {
+        controller.abort();
+        return {
+          sessionId: 'execution-1',
+          turnId: 'root-turn',
+          runId: 'root-run',
+          status: 'running',
+        };
+      }
+      return {
+        sessionId: 'execution-1',
+        turnId: 'root-turn',
+        runId: 'root-run',
+        status: 'cancelled',
+        terminalEventId: 'terminal',
+        abortSource: 'stop_button',
+      };
+    },
   });
 
   const result = await executeEphemeralRuntimeHostSession(connection, executionInput(), {
@@ -164,6 +190,46 @@ test('cancelled ephemeral execution asks Host to stop the whole Session before r
   assert.equal(result.status, 'cancelled');
   assert.deepEqual(operations, [
     'session.create',
+    'session.stop',
+    'session.catalog.query',
+    'session.remove',
+    'usage.query',
+  ]);
+});
+
+test('cancellation during retirement stops the Session before retrying removal', async () => {
+  const operations: string[] = [];
+  const controller = new AbortController();
+  let removals = 0;
+  const connection = connectionStub({
+    operations,
+    request(operation) {
+      if (operation === 'session.catalog.query') {
+        return { kind: 'session', session: { revision: 1 } };
+      }
+      if (operation === 'session.remove') {
+        removals += 1;
+        if (removals === 1) {
+          controller.abort();
+          throw Object.assign(new Error('Session is busy'), { code: 'session_busy' });
+        }
+        return { kind: 'removed', sessionId: 'execution-1' };
+      }
+      if (operation === 'session.stop') return { kind: 'stopped', sessionId: 'execution-1' };
+      if (operation === 'usage.query') return usagePage([]);
+    },
+  });
+
+  await executeEphemeralRuntimeHostSession(connection, executionInput(), {
+    signal: controller.signal,
+    pollIntervalMs: 0,
+    requestTimeoutMs: 100,
+  });
+
+  assert.deepEqual(operations, [
+    'session.create',
+    'session.catalog.query',
+    'session.remove',
     'session.stop',
     'session.catalog.query',
     'session.remove',

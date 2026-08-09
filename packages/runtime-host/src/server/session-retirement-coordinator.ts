@@ -60,12 +60,16 @@ type RetirementGoals = Pick<
   HostGoalCoordinator,
   'beginSessionRetirement' | 'hasLiveGoal' | 'stopSession' | 'unarchiveSessions'
 >;
-type RetirementResources = Pick<HostRuntimeResourceCoordinator, 'hasLiveSessionResources'>;
+type RetirementResources = Pick<
+  HostRuntimeResourceCoordinator,
+  'hasLiveSessionResources' | 'stopSession'
+>;
 type RetirementSessionEffects = {
   hasLiveSessionState(sessionId: string): boolean;
 };
 type RetirementGraph = {
   hasLiveSessionState(sessionId: string): Promise<boolean>;
+  stop(rootSessionId: string): Promise<void>;
 };
 type RetirementGraphWake = {
   hasLiveSessionState(sessionId: string): boolean;
@@ -90,6 +94,7 @@ export interface HostSessionRetirementCoordinatorOptions {
   readonly goals: RetirementGoals;
   readonly automation: {
     beginSessionRetirement(sessionIds: readonly string[]): Promise<HostAutomationSessionRetirement>;
+    stopSession(sessionId: string): Promise<void>;
   };
   readonly resources: RetirementResources;
   readonly sessionEffects: RetirementSessionEffects;
@@ -140,8 +145,20 @@ export class HostSessionRetirementCoordinator {
 
   async #stop(input: SessionStopInput): Promise<OperationOutcome<'session.stop'>> {
     try {
-      this.#goals.stopSession(input.sessionId);
-      await this.#root.stopSession(input.sessionId, { source: 'stop_button', mode: 'immediate' });
+      const sessionIds = await this.#readFamilySessionIds(input.sessionId);
+      for (const sessionId of sessionIds) this.#goals.stopSession(sessionId);
+      await Promise.all(
+        sessionIds.map(async (sessionId) => {
+          if (await this.#graph.hasLiveSessionState(sessionId)) await this.#graph.stop(sessionId);
+        }),
+      );
+      await Promise.all(
+        sessionIds.map((sessionId) =>
+          this.#root.stopSession(sessionId, { source: 'stop_button', mode: 'immediate' }),
+        ),
+      );
+      await Promise.all(sessionIds.map((sessionId) => this.#resources.stopSession(sessionId)));
+      await Promise.all(sessionIds.map((sessionId) => this.#automation.stopSession(sessionId)));
       return { ok: true, result: { kind: 'stopped', sessionId: input.sessionId } };
     } catch (error) {
       if (isSessionNotFoundError(error)) {

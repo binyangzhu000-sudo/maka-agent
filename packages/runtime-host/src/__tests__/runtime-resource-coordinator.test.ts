@@ -411,6 +411,14 @@ describe('Host Runtime Resource coordinator', () => {
     assert.equal(!missing.ok && missing.error.code, 'not_found');
     assert.equal(harness.stopCount, 0);
   });
+
+  test('Session stop terminates every Runtime Resource owned by that Session', async () => {
+    const harness = createHarness();
+
+    await harness.coordinator.stopSession(SESSION_ID);
+
+    assert.equal(harness.terminateCount, 1);
+  });
 });
 
 function createHarness() {
@@ -498,6 +506,11 @@ function createHarness() {
       buffer: '',
       size: { cols: currentSnapshot.output.cols, rows: currentSnapshot.output.rows },
     }),
+    terminateSession: async (sessionId) => {
+      state.terminateCount += 1;
+      return { sessionId, token: Symbol('session-close') };
+    },
+    rollbackSessionClose: () => {},
     terminateAll: async () => {
       state.terminateCount += 1;
     },

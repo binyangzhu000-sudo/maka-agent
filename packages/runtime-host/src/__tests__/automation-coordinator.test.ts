@@ -522,6 +522,35 @@ describe('Host Automation coordinator', () => {
     });
   });
 
+  test('Session stop removes disposable Automations but preserves durable definitions', async () => {
+    await withHarness(async (harness) => {
+      await harness.coordinator.prepareRecovery();
+      await harness.coordinator.recover();
+      for (const [name, durable] of [
+        ['cell follow-up', false],
+        ['workspace schedule', true],
+      ] as const) {
+        const created = await harness.coordinator.create({
+          kind: 'cron',
+          name,
+          prompt: 'Continue later.',
+          sessionId: 'creator-session',
+          schedule: { type: 'interval', seconds: 60 },
+          durable,
+        });
+        assert.ok(!('error' in created));
+      }
+
+      await harness.coordinator.stopSession('creator-session');
+
+      const snapshot = await harness.store.read();
+      assert.deepEqual(
+        snapshot.automations.map((automation) => automation.name),
+        ['workspace schedule'],
+      );
+    });
+  });
+
   test('a Session that can no longer mutate is not reported to the model as a wrong status', async () => {
     await withHarness(async (harness) => {
       await harness.coordinator.prepareRecovery();

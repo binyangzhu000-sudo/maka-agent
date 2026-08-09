@@ -61,7 +61,14 @@ export async function executeEphemeralRuntimeHostSession(
   const now = options.now ?? Date.now;
   const startedAt = now();
   const { executionId: sessionId, turnId, content, maxSteps, ...session } = input;
+  let stopRequested = false;
+  const requestStop = async () => {
+    if (stopRequested) return;
+    stopRequested = true;
+    await connection.request('session.stop', { sessionId }, timeout);
+  };
 
+  options.signal?.throwIfAborted();
   await createOrReconcile(connection, { ...session, sessionId }, timeout);
   try {
     const started = await startOrReconcile(
@@ -70,7 +77,14 @@ export async function executeEphemeralRuntimeHostSession(
       timeout,
     );
     if (started.kind === 'blocked') {
-      await retireWhenQuiescent(connection, sessionId, timeout, pollInterval);
+      await retireWhenQuiescent(
+        connection,
+        sessionId,
+        timeout,
+        pollInterval,
+        options.signal,
+        requestStop,
+      );
       return {
         status: 'failed',
         executionId: sessionId,
@@ -89,8 +103,16 @@ export async function executeEphemeralRuntimeHostSession(
       timeout,
       pollInterval,
       options.signal,
+      requestStop,
     );
-    await retireWhenQuiescent(connection, sessionId, timeout, pollInterval);
+    await retireWhenQuiescent(
+      connection,
+      sessionId,
+      timeout,
+      pollInterval,
+      options.signal,
+      requestStop,
+    );
     const usage = await readSessionUsage(connection, sessionId, startedAt, now(), timeout);
     return {
       status: terminal.status,
@@ -178,13 +200,10 @@ async function waitForRootTurn(
   timeout: number,
   pollInterval: number,
   signal?: AbortSignal,
+  requestStop?: () => Promise<void>,
 ): Promise<Extract<TurnSnapshot, { status: 'completed' | 'failed' | 'cancelled' }>> {
-  let stopRequested = false;
   for (;;) {
-    if (signal?.aborted && !stopRequested) {
-      stopRequested = true;
-      await connection.request('session.stop', { sessionId: identity.sessionId }, timeout);
-    }
+    if (signal?.aborted) await requestStop?.();
     const turn = await connection.queryTurn(identity, timeout);
     if (turn.status === 'completed' || turn.status === 'failed' || turn.status === 'cancelled') {
       return turn;
@@ -198,8 +217,11 @@ async function retireWhenQuiescent(
   sessionId: string,
   timeout: number,
   pollInterval: number,
+  signal?: AbortSignal,
+  requestStop?: () => Promise<void>,
 ): Promise<void> {
   for (;;) {
+    if (signal?.aborted) await requestStop?.();
     const queried = await connection.request(
       'session.catalog.query',
       { kind: 'get', sessionId },

@@ -267,6 +267,32 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
     });
   }
 
+  stopSession(sessionId: string): Promise<void> {
+    return this.#exclusive(async () => {
+      const pending = [...this.#pendingFires.values()].filter(
+        (fire) => fire.targetSessionId === sessionId,
+      );
+      const disposable = this.#manager
+        .listForSession(sessionId)
+        .filter((automation) => automation.durable !== true);
+      if (pending.length === 0 && disposable.length === 0) return;
+      const before = this.#snapshot();
+      for (const fire of pending) {
+        const automation = this.#manager.get(fire.automationId);
+        if (automation) {
+          settleAutomationAttempt(
+            automation,
+            { status: 'cancelled', runId: fire.runId, error: 'Session stopped' },
+            this.#now(),
+          );
+        }
+        this.#pendingFires.delete(fire.automationId);
+      }
+      for (const automation of disposable) this.#manager.delete(automation.id, sessionId);
+      await this.#commitOrRestore(before);
+    });
+  }
+
   async close(): Promise<void> {
     if (this.#closed) return;
     await this.#fireCoordinator.close();

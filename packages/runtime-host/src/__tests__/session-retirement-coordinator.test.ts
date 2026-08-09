@@ -30,6 +30,13 @@ describe('Host Session retirement coordinator', () => {
     await withHarness(async (harness) => {
       harness.blockers.root.add(harness.rootId);
       harness.blockers.goal.add(harness.rootId);
+      harness.blockers.message.add(harness.rootId);
+      harness.blockers.interaction.add(harness.rootId);
+      harness.blockers.resource.add(harness.rootId);
+      harness.blockers.effect.add(harness.rootId);
+      harness.blockers.graph.add(harness.rootId);
+      harness.blockers.graphWake.add(harness.rootId);
+      harness.blockers.automation.add(harness.rootId);
 
       assert.deepEqual(
         await harness.coordinator.handlers['session.stop'](
@@ -43,6 +50,13 @@ describe('Host Session retirement coordinator', () => {
       );
       assert.equal(harness.blockers.root.has(harness.rootId), false);
       assert.equal(harness.blockers.goal.has(harness.rootId), false);
+      assert.equal(harness.blockers.message.has(harness.rootId), false);
+      assert.equal(harness.blockers.interaction.has(harness.rootId), false);
+      assert.equal(harness.blockers.resource.has(harness.rootId), false);
+      assert.equal(harness.blockers.effect.has(harness.rootId), false);
+      assert.equal(harness.blockers.graph.has(harness.rootId), false);
+      assert.equal(harness.blockers.graphWake.has(harness.rootId), false);
+      assert.equal(harness.blockers.automation.has(harness.rootId), false);
     });
   });
 
@@ -813,6 +827,9 @@ async function withHarness(
       root: {
         stopSession: async (sessionId) => {
           blockers.root.delete(sessionId);
+          blockers.message.delete(sessionId);
+          blockers.interaction.delete(sessionId);
+          blockers.effect.delete(sessionId);
         },
         readRootState: (sessionId) =>
           blockers.root.has(sessionId)
@@ -833,6 +850,9 @@ async function withHarness(
         unarchiveSessions: () => undefined,
       },
       automation: {
+        stopSession: async (sessionId) => {
+          blockers.automation.delete(sessionId);
+        },
         beginSessionRetirement: async (sessionIds) => {
           if (sessionIds.some((sessionId) => blockers.automation.has(sessionId))) {
             throw new HostAutomationSessionBusyError('Session has a live Automation');
@@ -842,12 +862,19 @@ async function withHarness(
       },
       resources: {
         hasLiveSessionResources: async (sessionId) => blockers.resource.has(sessionId),
+        stopSession: async (sessionId) => {
+          blockers.resource.delete(sessionId);
+        },
       },
       sessionEffects: {
         hasLiveSessionState: (sessionId) => blockers.effect.has(sessionId),
       },
       graph: {
         hasLiveSessionState: async (sessionId) => blockers.graph.has(sessionId),
+        stop: async (sessionId) => {
+          blockers.graph.delete(sessionId);
+          blockers.graphWake.delete(sessionId);
+        },
       },
       graphWake: {
         hasLiveSessionState: (sessionId) => blockers.graphWake.has(sessionId),

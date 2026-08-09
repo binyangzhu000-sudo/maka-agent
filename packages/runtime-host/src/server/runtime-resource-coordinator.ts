@@ -71,6 +71,11 @@ interface RuntimeResourceManager
     PtyControlWriter {
   inspectResource(sessionId: string, ref: string): Promise<ShellRunSnapshotResult>;
   getLivePtySnapshot(sessionId: string, ref: string): ShellRunPtySnapshot | null;
+  terminateSession(sessionId: string): Promise<{
+    readonly sessionId: string;
+    readonly token: symbol;
+  }>;
+  rollbackSessionClose(lease: { readonly sessionId: string; readonly token: symbol }): void;
   terminateAll(): Promise<void>;
 }
 
@@ -250,6 +255,11 @@ export class HostRuntimeResourceCoordinator
   async hasLiveSessionResources(sessionId: string): Promise<boolean> {
     const updates = await this.#sessions.listShellRunUpdates(sessionId);
     return updates.some((update) => isActiveShellRunStatus(update.result.status));
+  }
+
+  async stopSession(sessionId: string): Promise<void> {
+    const lease = await this.#manager.terminateSession(sessionId);
+    this.#manager.rollbackSessionClose(lease);
   }
 
   #query(input: RuntimeResourceQueryInput): Promise<OperationOutcome<'runtime.resource.query'>> {
