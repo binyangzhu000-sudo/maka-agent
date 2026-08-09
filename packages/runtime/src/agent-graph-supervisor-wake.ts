@@ -313,11 +313,15 @@ export class AgentGraphSupervisorWakeCoordinator {
     const abort = this.#sessionAbort(rootSessionId);
     abort.abort();
     await Promise.all([...(this.#tasksBySession.get(rootSessionId) ?? [])]);
-    await this.retireSessions([rootSessionId]);
+    await this.#input.wakeStore.supersedeAgentGraphSupervisorWakes({
+      rootSessionIds: [rootSessionId],
+      reason: 'session_retired',
+    });
     this.#sessionAborts.delete(rootSessionId);
   }
 
   async retireSessions(rootSessionIds: readonly string[]): Promise<number> {
+    for (const sessionId of rootSessionIds) this.#retiredSessions.delete(sessionId);
     return this.#input.wakeStore.supersedeAgentGraphSupervisorWakes({
       rootSessionIds,
       reason: 'session_retired',

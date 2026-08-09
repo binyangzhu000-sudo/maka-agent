@@ -675,11 +675,14 @@ describe('Agent Graph supervisor wake delivery', () => {
   test('close aborts an in-flight wake turn and leaves its attempt retryable', async () => {
     const store = createSqliteSessionMetadataStore(':memory:');
     const started = deferred();
+    let starts = 0;
     const coordinator = new AgentGraphSupervisorWakeCoordinator({
       activityRegistry: new SessionActivityRegistry(),
       wakeStore: store,
       readSnapshot: async () => snapshot(),
       startTurn: async (_sessionId, input, _activity, abortSignal) => {
+        starts += 1;
+        if (starts > 1) return { kind: 'completed', turnId: input.turnId };
         started.resolve();
         await new Promise<void>((resolve) => {
           if (abortSignal.aborted) resolve();
@@ -727,6 +730,8 @@ describe('Agent Graph supervisor wake delivery', () => {
       await coordinator.stopSession('root-session');
       assert.equal(coordinator.hasLiveSessionState('root-session'), false);
       assert.equal(coordinator.notify('root-session', reconciliation()), undefined);
+      await coordinator.retireSessions(['root-session']);
+      assert.ok(coordinator.notify('root-session', reconciliation()));
     } finally {
       await coordinator.close();
       store.close();
