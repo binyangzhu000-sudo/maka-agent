@@ -26,6 +26,7 @@ export {
   type RunExperimentInput,
   type SubjectAdapter,
   type SubjectExecutionContext,
+  type SubjectExecutionEnvironment,
   type SubjectExecutionResult,
 } from './runner.js';
 export { FileAttemptStore } from './attempt-store.js';
@@ -38,11 +39,6 @@ export {
   createExternalSubjectAdapter,
   createLocalExternalExecution,
 } from './external-subject.js';
-export {
-  createExperimentExecutorAdapter,
-  type ExperimentExecutorDriver,
-  type ExecutorVerificationResult,
-} from './executor-adapter.js';
 export {
   openExperimentDirectory,
   type ExperimentDirectory,

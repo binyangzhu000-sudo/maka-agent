@@ -6,7 +6,7 @@ import {
   runExperiment,
   selectCellResult,
   type CellAttempt,
-  type EvalResult,
+  type SubjectExecutionResult,
   type ExperimentExecutor,
   type ExperimentSpec,
   type AttemptStore,
@@ -156,9 +156,11 @@ describe('cell attempts', () => {
     const executed: string[] = [];
     const executor: ExperimentExecutor = {
       kind: 'test',
-      async execute({ cell }): Promise<EvalResult> {
-        executed.push(cell.id);
-        return attempt(2, 'completed').result;
+      async prepare() {
+        return { cwd: '/task', metadata: {} };
+      },
+      async verify() {
+        return { status: 'completed', score: 1, artifacts: [] };
       },
     };
 
@@ -169,8 +171,9 @@ describe('cell attempts', () => {
       subjects: [
         {
           kind: 'maka',
-          async execute() {
-            throw new Error('the test executor owns this result');
+          async execute({ cell }) {
+            executed.push(cell.id);
+            return completedSubjectResult();
           },
         },
       ],
@@ -202,9 +205,12 @@ describe('cell attempts', () => {
         executors: [
           {
             kind: 'harbor',
-            async execute() {
+            async prepare() {
               executions += 1;
-              return completedResult();
+              return { cwd: '/task', metadata: {} };
+            },
+            async verify() {
+              return { status: 'completed', score: 1, artifacts: [] };
             },
           },
         ],
@@ -286,6 +292,13 @@ function oneCellSpec(): ExperimentSpec {
   };
 }
 
-function completedResult(): EvalResult {
-  return attempt(1, 'completed').result;
+function completedSubjectResult(): SubjectExecutionResult {
+  const result = attempt(1, 'completed').result;
+  return {
+    usage: result.usage,
+    costUsd: result.costUsd,
+    durationMs: result.durationMs,
+    status: 'completed',
+    artifacts: result.artifacts,
+  };
 }

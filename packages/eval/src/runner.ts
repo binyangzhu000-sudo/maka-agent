@@ -25,10 +25,9 @@ export interface SubjectExecutionResult {
   readonly artifacts: readonly JsonObject[];
 }
 
-export interface SubjectExecutionContext {
+export interface SubjectExecutionEnvironment {
   readonly cwd: string;
   readonly metadata: JsonObject;
-  readonly signal?: AbortSignal;
   readonly executeMaka?: (
     input: EphemeralRuntimeHostExecutionInput,
     options?: EphemeralRuntimeHostExecutionOptions,
@@ -42,6 +41,10 @@ export interface SubjectExecutionContext {
   }) => Promise<{ readonly exitCode: number; readonly stdout: string }>;
 }
 
+export interface SubjectExecutionContext extends SubjectExecutionEnvironment {
+  readonly signal?: AbortSignal;
+}
+
 export interface SubjectAdapter {
   readonly kind: string;
   validate?(cell: ExperimentCell): void;
@@ -53,10 +56,23 @@ export interface SubjectAdapter {
 
 export interface ExperimentExecutor {
   readonly kind: string;
-  execute(input: {
+  prepare(input: {
     readonly cell: ExperimentCell;
-    readonly runSubject: (context: SubjectExecutionContext) => Promise<SubjectExecutionResult>;
-  }): Promise<EvalResult>;
+    readonly signal?: AbortSignal;
+  }): Promise<SubjectExecutionEnvironment>;
+  verify(input: {
+    readonly cell: ExperimentCell;
+    readonly environment: SubjectExecutionEnvironment;
+    readonly subject: SubjectExecutionResult;
+  }): Promise<{
+    readonly status: EvalResult['status'];
+    readonly score: number | null;
+    readonly artifacts: readonly JsonObject[];
+  }>;
+  cleanup?(input: {
+    readonly cell: ExperimentCell;
+    readonly environment: SubjectExecutionEnvironment;
+  }): Promise<void>;
 }
 
 export interface AttemptStore {
@@ -71,6 +87,7 @@ export interface RunExperimentInput {
   readonly executors: readonly ExperimentExecutor[];
   readonly subjects: readonly SubjectAdapter[];
   readonly cellIds?: readonly string[];
+  readonly signal?: AbortSignal;
   readonly now?: () => number;
 }
 
@@ -109,10 +126,7 @@ async function runExperimentExclusive(input: RunExperimentInput): Promise<Experi
     const subject = subjects.get(cell.subject.kind)!;
     const sequence = (attempts.at(-1)?.sequence ?? 0) + 1;
     const startedAt = now();
-    const result = await executor.execute({
-      cell,
-      runSubject: (context) => subject.execute({ cell, context }),
-    });
+    const result = await executeCell(executor, subject, cell, input.signal);
     await input.store.append({
       cellId: cell.id,
       sequence,
@@ -131,6 +145,105 @@ async function runExperimentExclusive(input: RunExperimentInput): Promise<Experi
     else if (attempts.length > 0) replaceableCellIds.push(cell.id);
   }
   return { results, replaceableCellIds };
+}
+
+const EMPTY_USAGE: NormalizedUsage = Object.freeze({
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  reasoningTokens: 0,
+  totalTokens: 0,
+});
+
+async function executeCell(
+  executor: ExperimentExecutor,
+  subjectAdapter: SubjectAdapter,
+  cell: ExperimentCell,
+  signal?: AbortSignal,
+): Promise<EvalResult> {
+  let environment: SubjectExecutionEnvironment;
+  try {
+    environment = await executor.prepare({ cell, signal });
+  } catch {
+    return failedResult('infra_failed', 'prepare');
+  }
+
+  let subject: SubjectExecutionResult;
+  try {
+    subject = await subjectAdapter.execute({
+      cell,
+      context: { ...environment, ...(signal ? { signal } : {}) },
+    });
+  } catch {
+    subject = { ...failedResult('infra_failed', 'subject'), status: 'infra_failed' };
+  }
+
+  let result: EvalResult;
+  if (subject.status === 'infra_failed' || subject.status === 'indeterminate') {
+    result = {
+      score: null,
+      usage: subject.usage,
+      costUsd: subject.costUsd,
+      durationMs: subject.durationMs,
+      status: subject.status,
+      artifacts: subject.artifacts,
+    };
+  } else {
+    try {
+      const verified = await executor.verify({ cell, environment, subject });
+      const status = subject.status === 'failed' ? 'subject_failed' : verified.status;
+      result = {
+        score: verified.score,
+        usage: subject.usage,
+        costUsd: subject.costUsd,
+        durationMs: subject.durationMs,
+        status,
+        artifacts: [...subject.artifacts, ...verified.artifacts],
+      };
+    } catch {
+      result = {
+        score: null,
+        usage: subject.usage,
+        costUsd: subject.costUsd,
+        durationMs: subject.durationMs,
+        status: 'infra_failed',
+        artifacts: [...subject.artifacts, executorFailureArtifact('verify')],
+      };
+    }
+  }
+
+  if (executor.cleanup) {
+    try {
+      await executor.cleanup({ cell, environment });
+    } catch {
+      return {
+        ...result,
+        score: null,
+        status: 'indeterminate',
+        artifacts: [...result.artifacts, executorFailureArtifact('cleanup')],
+      };
+    }
+  }
+  return result;
+}
+
+function failedResult(
+  status: 'infra_failed' | 'indeterminate',
+  phase: 'prepare' | 'subject',
+): EvalResult {
+  return {
+    score: null,
+    usage: EMPTY_USAGE,
+    costUsd: null,
+    durationMs: 0,
+    status,
+    artifacts: [executorFailureArtifact(phase)],
+  };
+}
+
+function executorFailureArtifact(phase: 'prepare' | 'subject' | 'verify' | 'cleanup'): JsonObject {
+  return { kind: 'executor_failure', phase };
 }
 
 function uniqueAdapter<T extends { readonly kind: string }>(

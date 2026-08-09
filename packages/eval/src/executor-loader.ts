@@ -31,7 +31,13 @@ export async function loadExperimentExecutor(
     specPath,
     options: config.options,
   });
-  if (!executor || executor.kind !== spec.executor.kind || typeof executor.execute !== 'function') {
+  if (
+    !executor ||
+    executor.kind !== spec.executor.kind ||
+    typeof executor.prepare !== 'function' ||
+    typeof executor.verify !== 'function' ||
+    (executor.cleanup !== undefined && typeof executor.cleanup !== 'function')
+  ) {
     throw new Error(`executor adapter must return the ${spec.executor.kind} executor`);
   }
   return executor;

@@ -20,6 +20,6 @@ Use `--cell <cell-id>` to replace one failed or indeterminate cell. The attempt 
 
 Executor modules implement the `ExperimentExecutor` contract and are loaded from `executor.module` plus `executor.export`. Harbor and Pier integrations belong in such adapters; they are not separate workflows. The executor prepares the task environment and supplies its execution capabilities to `runSubject`: `executeMaka` delegates one disposable execution to a Runtime Host client, while `executeExternal` runs a generic external subject in that same environment. Eval never assumes that an executor environment is the CLI process working directory.
 
-Use `createExperimentExecutorAdapter(kind, driver)` when an executor has the standard prepare → subject → verify → cleanup lifecycle. Framework-specific provisioning, Runtime Host connection details, credentials, and machine paths remain in the executor adapter; they are not Eval semantics.
+Every executor implements the single prepare → verify → cleanup contract. The kernel invokes exactly one subject between prepare and verify. Framework-specific provisioning, Runtime Host connection details, credentials, and machine paths remain in the executor adapter; they are not Eval semantics.
 
 The result kernel contains only score, normalized usage, attributable cost, duration, status, and artifacts. Specs carry every semantic setting; environment variables are reserved for credentials and machine-local paths.
