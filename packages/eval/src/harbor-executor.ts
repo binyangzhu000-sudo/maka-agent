@@ -50,13 +50,13 @@ async function createHarnessExecutor(
     },
     async verify({ cell }) {
       const state = requireState(states, cell.id);
-      if ((await waitForChild(state.child)) !== 0) throw new Error('Harbor Trial failed');
+      if ((await waitForChild(state.child)) !== 0) throw new Error('executor Trial failed');
       state.server.close();
       const result = JSON.parse(await readFile(join(state.trialPath, 'result.json'), 'utf8')) as {
         exception_info?: unknown;
         verifier_result?: { rewards?: Record<string, number> | null } | null;
       };
-      if (result.exception_info) throw new Error('Harbor Trial did not settle cleanly');
+      if (result.exception_info) throw new Error('executor Trial did not settle cleanly');
       const score = result.verifier_result?.rewards?.[rewardKey(cell)] ?? null;
       return {
         status: score === null ? 'infra_failed' : 'completed',
@@ -105,7 +105,7 @@ function environment(state: RelayState, cwd: string): SubjectExecutionEnvironmen
 async function startTrial(
   cell: ExperimentCell,
   specPath: string,
-  options: HarborOptions,
+  options: HarnessOptions,
   kind: 'harbor' | 'pier',
   signal?: AbortSignal,
 ): Promise<RelayState> {
@@ -114,9 +114,9 @@ async function startTrial(
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Harbor relay did not bind TCP');
+  if (!address || typeof address === 'string') throw new Error('executor relay did not bind TCP');
   const trialsRoot = resolve(
-    process.env.MAKA_EVAL_HARBOR_TRIALS_DIR ?? join(dirname(specPath), '.maka-eval', 'harbor'),
+    process.env.MAKA_EVAL_TRIALS_DIR ?? join(dirname(specPath), '.maka-eval', kind),
   );
   await mkdir(trialsRoot, { recursive: true });
   const trialName = `${safeName(cell.id)}-${randomBytes(6).toString('hex')}`;
@@ -124,7 +124,7 @@ async function startTrial(
   await writeFile(
     configPath,
     `${JSON.stringify({
-      task: decodeTask(cell),
+      task: decodeTask(cell, kind),
       trial_name: trialName,
       trials_dir: trialsRoot,
       timeout_multiplier: positiveNumber(cell.budget.timeoutMultiplier, 'budget.timeoutMultiplier'),
@@ -138,8 +138,8 @@ async function startTrial(
           ...(isJsonObject(options.environment.env) ? options.environment.env : {}),
           ...Object.fromEntries(options.credentialEnvironment.map((name) => [name, `\${${name}}`])),
         },
-        ...(process.env.MAKA_EVAL_HARBOR_MOUNTS_JSON
-          ? { mounts: JSON.parse(process.env.MAKA_EVAL_HARBOR_MOUNTS_JSON) as unknown }
+        ...(process.env.MAKA_EVAL_MOUNTS_JSON
+          ? { mounts: JSON.parse(process.env.MAKA_EVAL_MOUNTS_JSON) as unknown }
           : {}),
       },
     })}\n`,
@@ -148,8 +148,9 @@ async function startTrial(
   const connected = once(server, 'connection').then(([socket]) => socket as Socket);
   const relayPath = resolve(dirname(fileURLToPath(import.meta.url)), '../harbor');
   const child = spawn(
-    process.env[kind === 'harbor' ? 'MAKA_EVAL_HARBOR_BIN' : 'MAKA_EVAL_PIER_BIN'] ?? kind,
-    ['trial', 'start', '--config', configPath],
+    process.env[kind === 'harbor' ? 'MAKA_EVAL_HARBOR_PYTHON' : 'MAKA_EVAL_PIER_PYTHON'] ??
+      'python3',
+    [join(relayPath, 'run_trial.py'), kind, configPath],
     {
       cwd: dirname(specPath),
       env: {
@@ -168,7 +169,7 @@ async function startTrial(
     ]();
     const ready = await readLine(lines);
     if (ready.token !== token || ready.kind !== 'ready' || typeof ready.instruction !== 'string') {
-      throw new Error('Harbor relay returned an invalid ready message');
+      throw new Error('executor relay returned an invalid ready message');
     }
     return {
       child,
@@ -200,7 +201,7 @@ async function execute(
     readonly signal?: AbortSignal;
   },
 ): Promise<{ exitCode: number; stdout: string }> {
-  if (state.used) throw new Error('Harbor Trial already executed its subject');
+  if (state.used) throw new Error('executor Trial already executed its subject');
   state.used = true;
   input.signal?.throwIfAborted();
   state.socket.write(
@@ -230,7 +231,7 @@ async function execute(
     typeof executed.exitCode !== 'number' ||
     typeof executed.stdout !== 'string'
   ) {
-    throw new Error('Harbor relay returned an invalid execution result');
+    throw new Error('executor relay returned an invalid execution result');
   }
   state.socket.end();
   return { exitCode: executed.exitCode, stdout: executed.stdout };
@@ -238,35 +239,35 @@ async function execute(
 
 async function readLine(lines: AsyncIterator<string>): Promise<Record<string, unknown>> {
   const result = await lines.next();
-  if (result.done) throw new Error('Harbor relay closed before settlement');
+  if (result.done) throw new Error('executor relay closed before settlement');
   return JSON.parse(result.value) as Record<string, unknown>;
 }
 
-interface HarborOptions {
+interface HarnessOptions {
   readonly containerCwd: string;
   readonly credentialEnvironment: readonly string[];
   readonly environment: JsonObject;
 }
 
-function decodeOptions(value: JsonObject): HarborOptions {
+function decodeOptions(value: JsonObject): HarnessOptions {
   const record = exact(value, ['containerCwd', 'credentialEnvironment', 'environment'], 'options');
   if (typeof record.containerCwd !== 'string' || !record.containerCwd.startsWith('/')) {
-    throw new Error('Harbor options.containerCwd must be absolute');
+    throw new Error('executor options.containerCwd must be absolute');
   }
   if (
     !Array.isArray(record.credentialEnvironment) ||
     !record.credentialEnvironment.every((name) => typeof name === 'string' && name.length > 0)
   ) {
-    throw new Error('Harbor options.credentialEnvironment must contain environment names');
+    throw new Error('executor options.credentialEnvironment must contain environment names');
   }
-  return record as unknown as HarborOptions;
+  return record as unknown as HarnessOptions;
 }
 
-function decodeTask(cell: ExperimentCell): Record<string, unknown> {
+function decodeTask(cell: ExperimentCell, kind: 'harbor' | 'pier'): Record<string, unknown> {
   const task = exact(cell.task.config, ['harbor'], 'task config');
   if (!isJsonObject(task.harbor)) throw new Error('task config.harbor must be an object');
   const repository = cell.benchmark.config.repository;
-  return typeof repository === 'string'
+  return kind === 'harbor' && typeof repository === 'string'
     ? { git_url: repository, git_commit_id: cell.benchmark.version, ...task.harbor }
     : task.harbor;
 }
@@ -310,13 +311,13 @@ function safeName(value: string): string {
 
 function requireState(states: Map<string, RelayState>, cellId: string): RelayState {
   const state = states.get(cellId);
-  if (!state) throw new Error(`Harbor Trial is missing for ${cellId}`);
+  if (!state) throw new Error(`executor Trial is missing for ${cellId}`);
   return state;
 }
 
 function childFailure(child: ChildProcess): Promise<never> {
   return once(child, 'exit').then(([code]) => {
-    throw new Error(`Harbor exited before Agent.run (${code})`);
+    throw new Error(`executor exited before Agent.run (${code})`);
   });
 }
 

@@ -5,18 +5,23 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createExternalSubjectAdapter } from '../external-subject.js';
 import { expandExperiment } from '../experiment.js';
-import { createHarborExecutor } from '../harbor-executor.js';
+import { createHarborExecutor, createPierExecutor } from '../harbor-executor.js';
 import type { ExperimentCell, ExperimentSpec } from '../experiment.js';
 import { parseExperimentSpec } from '../spec.js';
 
-test('Harbor owns Trial setup and verification around exactly one Eval subject', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'maka-eval-harbor-'));
-  const harbor = join(root, 'fake-harbor.mjs');
-  await writeFile(
-    harbor,
-    `#!/usr/bin/env node
+test('Harbor and Pier own Trial setup and verification around exactly one Eval subject', async () => {
+  for (const [kind, createExecutor] of [
+    ['harbor', createHarborExecutor],
+    ['pier', createPierExecutor],
+  ] as const) {
+    const root = await mkdtemp(join(tmpdir(), 'maka-eval-harbor-'));
+    const python = join(root, 'fake-python.mjs');
+    await writeFile(
+      python,
+      `#!/usr/bin/env node
 import { connect } from 'node:net';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+if(process.argv.at(-2)!==${JSON.stringify(kind)}) process.exit(64);
 const config = JSON.parse(await readFile(process.argv.at(-1), 'utf8'));
 const socket = connect(config.agent.kwargs.relay_port, config.agent.kwargs.relay_host);
 socket.setEncoding('utf8');
@@ -29,38 +34,40 @@ const dir=config.trials_dir+'/'+config.trial_name;
 await mkdir(dir,{recursive:true});
 await writeFile(dir+'/result.json',JSON.stringify({verifier_result:{rewards:{reward:1}},exception_info:null}));
 `,
-  );
-  await chmod(harbor, 0o755);
-  const previous = process.env.MAKA_EVAL_HARBOR_BIN;
-  process.env.MAKA_EVAL_HARBOR_BIN = harbor;
-  try {
-    const spec = experiment();
-    const executor = await createHarborExecutor({
-      spec,
-      specPath: join(root, 'spec.json'),
-      options: {
-        containerCwd: '/app',
-        credentialEnvironment: [],
-        environment: { type: 'docker', delete: true },
-      },
-    });
-    const cell = experimentCell(spec);
-    const environment = await executor.prepare({ cell });
-    const subject = await createExternalSubjectAdapter().execute({ cell, context: environment });
-    assert.equal(subject.output, 'Solve inside Harbor');
-    const verified = await executor.verify({ cell, environment, subject });
-    assert.deepEqual(
-      { status: verified.status, score: verified.score },
-      {
-        status: 'completed',
-        score: 1,
-      },
     );
-    assert.match(String(verified.artifacts[0]?.trialName), /^task-1--1--external-/);
-    await executor.cleanup?.({ cell, environment });
-  } finally {
-    if (previous === undefined) delete process.env.MAKA_EVAL_HARBOR_BIN;
-    else process.env.MAKA_EVAL_HARBOR_BIN = previous;
+    await chmod(python, 0o755);
+    const environmentName = `MAKA_EVAL_${kind.toUpperCase()}_PYTHON`;
+    const previous = process.env[environmentName];
+    process.env[environmentName] = python;
+    try {
+      const spec = experiment(kind);
+      const executor = await createExecutor({
+        spec,
+        specPath: join(root, 'spec.json'),
+        options: {
+          containerCwd: '/app',
+          credentialEnvironment: [],
+          environment: { type: 'docker', delete: true },
+        },
+      });
+      const cell = experimentCell(spec);
+      const environment = await executor.prepare({ cell });
+      const subject = await createExternalSubjectAdapter().execute({ cell, context: environment });
+      assert.equal(subject.output, 'Solve inside Harbor');
+      const verified = await executor.verify({ cell, environment, subject });
+      assert.deepEqual(
+        { status: verified.status, score: verified.score },
+        {
+          status: 'completed',
+          score: 1,
+        },
+      );
+      assert.match(String(verified.artifacts[0]?.trialName), /^task-1--1--external-/);
+      await executor.cleanup?.({ cell, environment });
+    } finally {
+      if (previous === undefined) delete process.env[environmentName];
+      else process.env[environmentName] = previous;
+    }
   }
 });
 
@@ -78,16 +85,16 @@ test('the current cohort is one fully expanded four-arm Experiment', async () =>
   assert.equal(expandExperiment(spec).length, 356);
 });
 
-function experiment(): ExperimentSpec {
+function experiment(kind: 'harbor' | 'pier'): ExperimentSpec {
   return {
     schemaVersion: 'maka.eval.v1',
     id: 'harbor-test',
     benchmark: { id: 'bench', version: '1', config: { repository: 'https://example.test/bench' } },
     executor: {
-      kind: 'harbor',
+      kind,
       config: {
-        module: '@maka/eval/harbor',
-        export: 'createHarborExecutor',
+        module: `@maka/eval/${kind}`,
+        export: kind === 'harbor' ? 'createHarborExecutor' : 'createPierExecutor',
         options: {},
       },
     },
