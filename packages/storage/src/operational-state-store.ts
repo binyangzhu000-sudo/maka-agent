@@ -133,6 +133,7 @@ const REQUIRED_SCHEMA_TABLES = [
   'workflow_daily_review_state',
   'workflow_daily_review_authority_state',
   'workflow_daily_review_archives',
+  'workflow_goal_authority',
   'usage_llm_calls',
   'usage_tool_invocations',
   'usage_model_call_attempts',
@@ -151,6 +152,7 @@ const SCHEMA_TABLE_INTRODUCTIONS = new Map<string, readonly [scope: string, vers
   ['runtime_session_event_ordinals', ['runtime', 11]],
   ['core_root_turn_start_rejections', ['core_execution', 2]],
   ['workflow_daily_review_authority_state', ['workflow', 3]],
+  ['workflow_goal_authority', ['workflow', 5]],
 ]);
 
 const require = createRequire(import.meta.url);

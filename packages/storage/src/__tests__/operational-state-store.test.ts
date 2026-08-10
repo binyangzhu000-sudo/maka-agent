@@ -17,7 +17,7 @@ import { createSqliteSessionMetadataStore } from '../sqlite-session-metadata-sto
 
 const LEGACY_RUNTIME_SCHEMA_VERSION = 10;
 const LEGACY_SESSION_METADATA_SCHEMA_VERSION = 21;
-const MAIN_WORKFLOW_SCHEMA_VERSION = 4;
+const MAIN_WORKFLOW_SCHEMA_VERSION = 5;
 const SESSION_CATALOG_REQUIRED_TRIGGER_NAMES = [
   'session_catalog_after_insert',
   'session_catalog_after_update',
@@ -146,7 +146,7 @@ test('installs new invariants when upgrading the current main schema', async () 
       SET version = CASE scope
         WHEN 'runtime' THEN 11
         WHEN 'session_metadata' THEN 22
-        WHEN 'workflow' THEN 4
+        WHEN 'workflow' THEN ${MAIN_WORKFLOW_SCHEMA_VERSION}
         ELSE version
       END;
     `);
@@ -437,6 +437,21 @@ const incompatibleSchemaCases: ReadonlyArray<{
         database
           .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
           .get('workflow_task_ledger_events'),
+        undefined,
+      );
+    },
+  },
+  {
+    name: 'rejects a current schema without workflow goal authority',
+    error: /required table is missing: workflow_goal_authority/,
+    prepare(database) {
+      database.exec('DROP TABLE workflow_goal_authority');
+    },
+    assertPreserved(database) {
+      assert.equal(
+        database
+          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get('workflow_goal_authority'),
         undefined,
       );
     },
