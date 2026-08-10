@@ -15,6 +15,12 @@ interface Policy {
   readonly boundedStep: boolean;
   readonly wildcard: 'any-star' | 'literal-star';
   readonly ignoreListedStar: boolean;
+  readonly allowEmpty: boolean;
+}
+
+interface CanonicalField {
+  readonly text: string | null;
+  readonly wildcard: boolean;
 }
 
 const MONTHS = Object.freeze({
@@ -51,6 +57,7 @@ const POLICIES: Readonly<Record<LegacyCronProfile, Policy>> = Object.freeze({
     boundedStep: true,
     wildcard: 'any-star',
     ignoreListedStar: false,
+    allowEmpty: false,
   },
   'automation-v1': {
     separator: 'whitespace',
@@ -60,6 +67,7 @@ const POLICIES: Readonly<Record<LegacyCronProfile, Policy>> = Object.freeze({
     boundedStep: false,
     wildcard: 'literal-star',
     ignoreListedStar: true,
+    allowEmpty: true,
   },
 });
 
@@ -73,16 +81,41 @@ export function canonicalizeLegacyCronExpression(
     policy.separator === 'space' ? expression.split(' ') : expression.trim().split(/\s+/);
   if (parts.length !== SPECS.length)
     throw new Error(`Invalid legacy cron expression: ${expression}`);
-  return parts
-    .map((part, index) => canonicalizeField(part ?? '', SPECS[index] as FieldSpec, policy))
-    .join(' ');
+  const fields = parts.map((part, index) =>
+    canonicalizeField(part ?? '', SPECS[index] as FieldSpec, policy),
+  );
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields as [
+    CanonicalField,
+    CanonicalField,
+    CanonicalField,
+    CanonicalField,
+    CanonicalField,
+  ];
+  if (minute.text === null || hour.text === null || month.text === null) {
+    throw new Error(`Legacy cron expression has no canonical equivalent: ${expression}`);
+  }
+  if (dayOfMonth.text === null) {
+    if (dayOfWeek.text === null || dayOfWeek.wildcard) {
+      throw new Error(`Legacy cron expression has no canonical equivalent: ${expression}`);
+    }
+    fields[2] = { text: '*', wildcard: true };
+  }
+  if (dayOfWeek.text === null) {
+    if (dayOfMonth.text === null || dayOfMonth.wildcard) {
+      throw new Error(`Legacy cron expression has no canonical equivalent: ${expression}`);
+    }
+    fields[4] = { text: '*', wildcard: true };
+  }
+  return fields.map(({ text }) => text).join(' ');
 }
 
-function canonicalizeField(input: string, spec: FieldSpec, policy: Policy): string {
+function canonicalizeField(input: string, spec: FieldSpec, policy: Policy): CanonicalField {
   if (!policy.aliases && !/^[\d*,/\-]+$/.test(input)) throw invalidCron(input);
   const normalized = policy.aliases && spec.aliases ? translateAliases(input, spec.aliases) : input;
   const parts = normalized.split(',');
   const values = new Set<number>();
+  const wildcardValues = new Set<number>();
+  const wildcardTokens = new Set<string>();
   let hasWildcardBase = false;
 
   for (const part of parts) {
@@ -105,6 +138,9 @@ function canonicalizeField(input: string, spec: FieldSpec, policy: Policy): stri
 
     if (base === '*') {
       hasWildcardBase = true;
+      if (policy.wildcard === 'any-star') {
+        wildcardTokens.add(hasStep ? `*/${step}` : '*');
+      }
       start = spec.min;
       end = spec.max;
     } else if (base.includes('-')) {
@@ -123,15 +159,32 @@ function canonicalizeField(input: string, spec: FieldSpec, policy: Policy): stri
 
     if (ignore) continue;
     for (let candidate = spec.min; candidate <= spec.max; candidate += 1) {
-      if (candidate < start || candidate > end || (candidate - start) % step !== 0) continue;
-      values.add(spec.normalizeSunday === true && candidate === 7 ? 0 : candidate);
+      if (candidate < start || candidate > end || (hasStep && (candidate - start) % step !== 0))
+        continue;
+      const normalizedCandidate = spec.normalizeSunday === true && candidate === 7 ? 0 : candidate;
+      values.add(normalizedCandidate);
+      if (base === '*' && policy.wildcard === 'any-star') {
+        wildcardValues.add(normalizedCandidate);
+      }
     }
   }
 
-  if (values.size === 0)
-    throw new Error(`Legacy cron expression has no canonical equivalent: ${input}`);
+  if (values.size === 0) {
+    if (!policy.allowEmpty)
+      throw new Error(`Legacy cron expression has no canonical equivalent: ${input}`);
+    return { text: null, wildcard: false };
+  }
   const wildcard = policy.wildcard === 'any-star' ? hasWildcardBase : normalized === '*';
-  return wildcard ? '*' : [...values].sort((left, right) => left - right).join(',');
+  if (!wildcard) {
+    return { text: [...values].sort((left, right) => left - right).join(','), wildcard };
+  }
+  if (policy.wildcard === 'literal-star' || wildcardTokens.has('*')) {
+    return { text: '*', wildcard };
+  }
+  const remainder = [...values]
+    .filter((value) => !wildcardValues.has(value))
+    .sort((left, right) => left - right);
+  return { text: [...wildcardTokens, ...remainder.map(String)].join(','), wildcard };
 }
 
 function parseInteger(input: string, min: number, max: number, policy: Policy): number {

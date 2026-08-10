@@ -271,6 +271,74 @@ describe('SQLite scheduling schema', () => {
     }
   });
 
+  test('preserves a released fractional Automation range', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            schedule: { type: 'cron', expression: '1.5-5.5 * * * *' },
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      assert.deepEqual(JSON.parse(migrated.record_json).schedule, {
+        kind: 'cron',
+        expression: '2,3,4,5 * * * *',
+        startAt: 1,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test('preserves a released Automation with an empty Vixie day arm', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            schedule: { type: 'cron', expression: '0 0 1x-5y * 5' },
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      assert.deepEqual(JSON.parse(migrated.record_json).schedule, {
+        kind: 'cron',
+        expression: '0 0 * * 5',
+        startAt: 1,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   test('migrates a released non-durable cron', () => {
     const database = new DatabaseSync(':memory:');
     try {
@@ -353,11 +421,134 @@ describe('SQLite scheduling schema', () => {
     }
   });
 
-  test('rejects a legacy cron with an in-flight fire without changing either catalog', () => {
+  test('preserves a released cron AgentRun identity', () => {
     const database = new DatabaseSync(':memory:');
     try {
       createLegacyAutomationSchema(database);
       insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            lastRunId: 'agent-run-1',
+            lastFireAt: 60_000,
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      assert.deepEqual(JSON.parse(migrated.record_json).runs, [
+        {
+          id: 'agent-run-1',
+          runId: 'agent-run-1',
+          at: 60_000,
+          outcome: 'ok',
+          message: 'Migrated legacy Automation run',
+        },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test('completes a released one-shot that already fired', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            schedule: { type: 'once', delaySeconds: 60 },
+            fireCount: 1,
+            nextFireAt: null,
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.status, 'completed');
+      assert.match(task.lastError, /outcome was recorded/);
+    } finally {
+      database.close();
+    }
+  });
+
+  test('completes an interrupted released schedule whose fire budget is spent', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            schedule: { type: 'interval', seconds: 60 },
+            fireCount: 1,
+            maxFires: 1,
+            nextFireAt: null,
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.status, 'completed');
+      assert.equal(task.nextFireAt, null);
+      assert.match(task.lastError, /not re-run/);
+    } finally {
+      database.close();
+    }
+  });
+
+  test('settles a released in-flight cron without replaying it', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const definition = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(definition.record_json),
+            nextFireAt: 120_000,
+            lastFireAt: 61_000,
+            fireCount: 1,
+          }),
+          'legacy-cron',
+        );
       database.prepare('INSERT INTO automation_pending_fires VALUES (?, ?, ?, ?, ?)').run(
         'fire-1',
         'legacy-cron',
@@ -381,18 +572,31 @@ describe('SQLite scheduling schema', () => {
       );
       migrateSqliteWorkflowDatabase(database);
 
-      assert.throws(
-        () => migrateSqliteAutomationDatabase(database),
-        /in-flight fire and cannot migrate safely/,
-      );
+      migrateSqliteAutomationDatabase(database);
+
       assert.equal(
         database.prepare('SELECT COUNT(*) AS count FROM automation_definitions').get()?.count,
-        1,
-      );
-      assert.equal(
-        database.prepare('SELECT COUNT(*) AS count FROM workflow_scheduled_tasks').get()?.count,
         0,
       );
+      assert.equal(
+        database.prepare('SELECT COUNT(*) AS count FROM workflow_scheduled_task_fires').get()
+          ?.count,
+        0,
+      );
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.fireCount, 1);
+      assert.equal(task.nextFireAt, 120_000);
+      assert.deepEqual(task.runs[0], {
+        id: 'run-1',
+        runId: 'run-1',
+        sessionId: 'session-1',
+        at: 61_000,
+        outcome: 'failed',
+        message: 'Interrupted during upgrade before the fire outcome was recorded; not re-run.',
+      });
     } finally {
       database.close();
     }
@@ -430,7 +634,6 @@ describe('SQLite scheduling schema', () => {
           runCount: 0,
         }),
       );
-
       migrateSqliteWorkflowDatabase(database);
 
       const row = database
@@ -489,6 +692,25 @@ describe('SQLite scheduling schema', () => {
           runCount: 0,
         }),
       );
+      database.prepare('INSERT INTO workflow_plan_reminders VALUES (?, ?, ?, ?)').run(
+        'wildcard-reminder',
+        11,
+        21,
+        JSON.stringify({
+          id: 'wildcard-reminder',
+          title: 'Ship on cadence',
+          note: 'Preserve this reminder too',
+          schedule: { kind: 'cron', expression: '*/5 * * * *', startAt: 11 },
+          delivery: { channel: 'local' },
+          status: 'scheduled',
+          enabled: true,
+          createdAt: 11,
+          updatedAt: 21,
+          nextRunAt: 300_000,
+          runs: [],
+          runCount: 0,
+        }),
+      );
 
       migrateSqliteWorkflowDatabase(database);
 
@@ -499,6 +721,60 @@ describe('SQLite scheduling schema', () => {
         kind: 'cron',
         expression: '5 * * * *',
         startAt: 10,
+      });
+      const wildcard = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('wildcard-reminder') as { record_json: string };
+      assert.deepEqual(JSON.parse(wildcard.record_json).schedule, {
+        kind: 'cron',
+        expression: '*/5 * * * *',
+        startAt: 11,
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test('preserves fixed-duration legacy reminder recurrence', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      database.exec(`
+        CREATE TABLE workflow_plan_reminders (
+          reminder_id TEXT PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
+      `);
+      database.prepare('INSERT INTO workflow_plan_reminders VALUES (?, ?, ?, ?)').run(
+        'legacy-reminder',
+        10,
+        20,
+        JSON.stringify({
+          id: 'legacy-reminder',
+          title: 'Daily',
+          note: '',
+          schedule: { kind: 'recurring', recurrence: 'daily', startAt: 30 },
+          delivery: { channel: 'local' },
+          status: 'paused',
+          enabled: false,
+          createdAt: 10,
+          updatedAt: 20,
+          nextRunAt: 30,
+          runs: [],
+          runCount: 0,
+        }),
+      );
+
+      migrateSqliteWorkflowDatabase(database);
+
+      const row = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-reminder') as { record_json: string };
+      assert.deepEqual(JSON.parse(row.record_json).schedule, {
+        kind: 'interval',
+        everySeconds: 86_400,
+        startAt: 30,
       });
     } finally {
       database.close();

@@ -189,19 +189,29 @@ test('migrates released scheduling state through the operational transaction', a
   }
 });
 
-test('rolls back every scheduling scope when a legacy cron is in flight', async () => {
+test('rolls back every scheduling scope when a legacy cron cannot be reconstructed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-operational-scheduling-rollback-'));
   const databasePath = join(root, 'runtime.sqlite');
   try {
     acquireOperationalStateDatabase(root).close();
     const legacy = new DatabaseSync(databasePath);
-    seedLegacyScheduling(legacy, true);
+    seedLegacyScheduling(legacy);
+    const row = legacy
+      .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+      .get('cron-1') as { record_json: string };
+    const { execution: _execution, ...record } = JSON.parse(row.record_json);
+    legacy
+      .prepare(
+        'UPDATE automation_definitions SET session_id = ?, record_json = ? WHERE automation_id = ?',
+      )
+      .run(
+        'missing-session',
+        JSON.stringify({ ...record, sessionId: 'missing-session' }),
+        'cron-1',
+      );
     legacy.close();
 
-    assert.throws(
-      () => acquireOperationalStateDatabase(root),
-      /in-flight fire and cannot migrate safely/,
-    );
+    assert.throws(() => acquireOperationalStateDatabase(root), /has no creator Session/);
 
     const preserved = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -467,6 +477,30 @@ const incompatibleSchemaCases: ReadonlyArray<{
     },
   },
   {
+    name: 'rejects an operational registry with a missing scope',
+    error: /Operational schema registry is missing scope workflow/,
+    prepare(database) {
+      database.exec(`
+        DELETE FROM operational_schema_migrations WHERE scope = 'workflow';
+        DROP TABLE workflow_task_ledger_events;
+      `);
+    },
+    assertPreserved(database) {
+      assert.equal(
+        database
+          .prepare('SELECT version FROM operational_schema_migrations WHERE scope = ?')
+          .get('workflow'),
+        undefined,
+      );
+      assert.equal(
+        database
+          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get('workflow_task_ledger_events'),
+        undefined,
+      );
+    },
+  },
+  {
     name: 'rejects an invalid registered schema version before migrating',
     error: /Operational schema usage has invalid version 1.5/,
     prepare(database) {
@@ -662,13 +696,30 @@ test('accepts a released runtime schema before later tables were introduced', as
   }
 });
 
+test('rejects a released Automation schema without its durable discriminator', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-malformed-automation-'));
+  try {
+    const lease = acquireOperationalStateDatabase(root);
+    seedLegacyScheduling(lease.database);
+    lease.database.exec('ALTER TABLE automation_definitions DROP COLUMN durable');
+    lease.close();
+
+    assert.throws(
+      () => acquireOperationalStateDatabase(root),
+      /released Automation schema is missing durable/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function rewindRuntimeSchema(database: DatabaseSync): void {
   database.exec('DROP TRIGGER runtime_events_assign_session_ordinal');
   database.exec('DROP TABLE runtime_session_event_ordinals');
   database.exec(`PRAGMA user_version = ${LEGACY_RUNTIME_SCHEMA_VERSION}`);
 }
 
-function seedLegacyScheduling(database: DatabaseSync, pendingCron = false): void {
+function seedLegacyScheduling(database: DatabaseSync): void {
   database.exec(`
     DROP TABLE workflow_scheduled_task_fires;
     DROP TABLE workflow_scheduled_tasks;
@@ -760,28 +811,6 @@ function seedLegacyScheduling(database: DatabaseSync, pendingCron = false): void
         collaborationMode: 'agent',
         orchestrationMode: 'default',
       },
-    }),
-  );
-  if (!pendingCron) return;
-  database.prepare('INSERT INTO automation_pending_fires VALUES (?, ?, ?, ?, ?)').run(
-    'fire-1',
-    'cron-1',
-    'session-1',
-    10,
-    JSON.stringify({
-      id: 'fire-1',
-      automationId: 'cron-1',
-      automationKind: 'cron',
-      automationName: 'Daily report',
-      prompt: 'Prepare the report',
-      scheduledFor: 10,
-      targetSessionId: 'session-1',
-      turnId: 'turn-1',
-      runId: 'run-1',
-      userMessageId: 'message-1',
-      status: 'admitted',
-      admittedAt: 10,
-      updatedAt: 10,
     }),
   );
 }

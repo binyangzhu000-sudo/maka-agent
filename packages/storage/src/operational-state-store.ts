@@ -357,7 +357,14 @@ function inspectOperationalStateSchemaInternal(
     if (scope !== 'runtime' && scope !== 'session_metadata') versions.set(scope, version);
   }
   for (const [scope, version] of OPERATIONAL_SCHEMA_VERSIONS) {
-    needsMigration ||= (registered.get(scope) ?? -1) < version;
+    const registeredVersion = registered.get(scope);
+    if (registeredVersion === undefined) {
+      throw new Error(
+        `Operational schema registry is missing scope ${scope}; ` +
+          'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
+      );
+    }
+    needsMigration ||= registeredVersion < version;
   }
   assertRequiredSchemaTables(database, versions);
   assertRequiredSchemaTriggers(database, versions);
@@ -485,8 +492,8 @@ function hasOnlyRuntimeSchemaTables(database: DatabaseSync): boolean {
 export function migrateOperationalStateDatabaseInternal(db: DatabaseSync, now: () => number): void {
   db.exec('BEGIN IMMEDIATE');
   try {
-    const current = inspectOperationalStateSchema(db).status === 'current';
-    if (current) {
+    const inspection = inspectOperationalStateSchema(db);
+    if (inspection.status === 'current') {
       db.exec('COMMIT');
       return;
     }
@@ -496,7 +503,10 @@ export function migrateOperationalStateDatabaseInternal(db: DatabaseSync, now: (
     migrateSqliteWorkflowDatabase(db);
     migrateSqliteUsageDatabase(db);
     migrateSqliteArtifactDatabase(db);
-    migrateSqliteAutomationDatabase(db);
+    migrateSqliteAutomationDatabase(db, {
+      sourceVersion: inspection.versions.get('automation'),
+      now,
+    });
     db.exec(`
       CREATE TABLE IF NOT EXISTS operational_schema_migrations (
         scope TEXT PRIMARY KEY,

@@ -5,7 +5,12 @@ import {
   isThinkingLevel,
 } from '@maka/core';
 import type { AutomationDefinition, AutomationPendingFire } from '@maka/core/automation';
-import type { ScheduledTask, ScheduledTaskRun } from '@maka/core/scheduled-task';
+import {
+  appendScheduledTaskRun,
+  computeNextFireAt,
+  type ScheduledTask,
+  type ScheduledTaskRun,
+} from '@maka/core/scheduled-task';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   assertAutomationSnapshotRelationships,
@@ -27,8 +32,13 @@ type LegacyAutomationTarget =
 
 export function readLegacyAutomationMigration(
   database: DatabaseSync,
+  required = false,
+  now = Date.now(),
 ): LegacyAutomationMigration | undefined {
-  if (!hasColumn(database, 'automation_definitions', 'durable')) return undefined;
+  if (!hasColumn(database, 'automation_definitions', 'durable')) {
+    if (required) throw new Error('The released Automation schema is missing durable');
+    return undefined;
+  }
   const revisionRow = database
     .prepare('SELECT revision FROM automation_authority_state WHERE singleton = 1')
     .get() as { revision?: unknown } | undefined;
@@ -57,7 +67,13 @@ export function readLegacyAutomationMigration(
       ORDER BY admitted_at, fire_id
     `)
     .all()
-    .map((row) => decodeLegacyAutomationPendingFire(row, byId));
+    .flatMap((row) => {
+      const fire = decodeLegacyAutomationPendingFire(row, byId);
+      return fire ? [fire] : [];
+    });
+  for (const target of targets) {
+    if (target.kind === 'scheduled_task') reconcileInterruptedLegacyTask(target.task, now);
+  }
   return {
     revision,
     definitions: targets.flatMap((target) =>
@@ -211,7 +227,7 @@ function canonicalizeLegacyAutomationSchedule(value: unknown): unknown {
 function decodeLegacyAutomationPendingFire(
   value: unknown,
   definitions: ReadonlyMap<string, LegacyAutomationTarget>,
-): AutomationPendingFire {
+): AutomationPendingFire | undefined {
   const row = requireRecord(value, 'legacy pending Automation fire row');
   const record = parseRecord(row.record_json, 'legacy pending Automation fire');
   const { automationKind, execution: _execution, ...currentRecord } = record;
@@ -227,9 +243,15 @@ function decodeLegacyAutomationPendingFire(
   const target = definitions.get(fire.automationId);
   if (!target) throw new Error(`Legacy pending Automation has no definition: ${fire.id}`);
   if (target.kind === 'scheduled_task') {
-    throw new Error(
-      `Legacy cron Automation has an in-flight fire and cannot migrate safely: ${fire.id}`,
-    );
+    if (
+      automationKind !== 'cron' ||
+      fire.automationName !== target.task.title ||
+      fire.prompt !== target.task.intent.body
+    ) {
+      throw new Error(`Legacy pending Automation contradicts its definition: ${fire.id}`);
+    }
+    settleInterruptedLegacyFire(target.task, fire);
+    return undefined;
   }
   if (automationKind !== 'heartbeat') throw new Error(`Invalid legacy Automation kind: ${fire.id}`);
   assertAutomationSnapshotRelationships([target.definition], [fire]);
@@ -246,6 +268,7 @@ function convertLegacyCronAutomation(
       : [
           {
             id: definition.lastRunId,
+            runId: definition.lastRunId,
             at: definition.lastFireAt,
             outcome: definition.lastError === null ? ('ok' as const) : ('failed' as const),
             message: definition.lastError ?? 'Migrated legacy Automation run',
@@ -272,6 +295,39 @@ function convertLegacyCronAutomation(
     runs: lastRun,
     lastError: definition.lastError,
   };
+}
+
+const INTERRUPTED_FIRE_MESSAGE =
+  'Interrupted during upgrade before the fire outcome was recorded; not re-run.';
+
+function settleInterruptedLegacyFire(task: ScheduledTask, fire: AutomationPendingFire): void {
+  task.runs = appendScheduledTaskRun(task.runs, {
+    id: fire.runId,
+    runId: fire.runId,
+    sessionId: fire.targetSessionId,
+    at: fire.updatedAt,
+    outcome: 'failed',
+    message: INTERRUPTED_FIRE_MESSAGE,
+  });
+  task.lastError = INTERRUPTED_FIRE_MESSAGE;
+  task.updatedAt = Math.max(task.updatedAt, fire.updatedAt);
+}
+
+function reconcileInterruptedLegacyTask(task: ScheduledTask, now: number): void {
+  if (task.status !== 'active' || task.nextFireAt !== null) return;
+  const budgetSpent =
+    (task.maxFires !== null && task.fireCount >= task.maxFires) ||
+    (task.schedule.kind === 'once' && task.fireCount > 0);
+  if (budgetSpent) {
+    task.status = 'completed';
+    task.lastError = INTERRUPTED_FIRE_MESSAGE;
+    return;
+  }
+  const nextFireAt = computeNextFireAt(task.schedule, now);
+  if (nextFireAt === null) {
+    throw new Error(`Interrupted legacy Automation cannot be re-armed: ${task.id}`);
+  }
+  task.nextFireAt = nextFireAt;
 }
 
 function convertLegacyCronSchedule(definition: AutomationDefinition): ScheduledTask['schedule'] {
@@ -387,10 +443,19 @@ function decodeLegacyReminderSchedule(value: unknown): ScheduledTask['schedule']
     };
   }
   if (schedule.kind === 'recurring') {
+    const recurrence = requireOneOf(schedule.recurrence, ['daily', 'weekly', 'monthly'] as const);
+    const startAt = requireNonnegativeInteger(schedule.startAt, 'legacy plan reminder startAt');
+    if (recurrence !== 'monthly') {
+      return {
+        kind: 'interval',
+        everySeconds: recurrence === 'daily' ? 86_400 : 604_800,
+        startAt,
+      };
+    }
     return {
       kind: 'calendar',
-      recurrence: requireOneOf(schedule.recurrence, ['daily', 'weekly', 'monthly'] as const),
-      anchorAt: requireNonnegativeInteger(schedule.startAt, 'legacy plan reminder startAt'),
+      recurrence,
+      anchorAt: startAt,
     };
   }
   if (schedule.kind === 'cron') {

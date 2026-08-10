@@ -11,8 +11,15 @@ export const SQLITE_AUTOMATION_REQUIRED_TABLES = [
   ['automation_pending_fires', 1],
 ] as const;
 
-export function migrateSqliteAutomationDatabase(db: DatabaseSync): void {
-  const legacy = readLegacyAutomationMigration(db);
+export function migrateSqliteAutomationDatabase(
+  db: DatabaseSync,
+  options?: { readonly sourceVersion?: number; readonly now?: () => number },
+): void {
+  const legacy = readLegacyAutomationMigration(
+    db,
+    options?.sourceVersion === 1,
+    options?.now?.() ?? Date.now(),
+  );
   const legacyDefinition = db
     .prepare(
       "SELECT 1 AS present FROM pragma_table_info('automation_definitions') WHERE name = 'durable'",

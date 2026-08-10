@@ -270,7 +270,7 @@ async function walk(root: string, current: string, result: OperationalBackupFile
       entry.name === `${OPERATIONAL_STATE_DATABASE_NAME}-shm` ||
       entry.name === `${OPERATIONAL_STATE_DATABASE_NAME}-wal`
     ) {
-      continue;
+      throw new OperationalBackupError('corrupt_backup', 'Backup cannot contain SQLite sidecars');
     }
     const path = resolve(current, entry.name);
     if (entry.isSymbolicLink()) {

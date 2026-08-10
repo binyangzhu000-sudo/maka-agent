@@ -177,6 +177,22 @@ test('rejects a backup whose SQLite Artifact metadata has no matching payload', 
   }
 });
 
+test('rejects a backup with an uncheckpointed SQLite sidecar', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-wal-'));
+  const backupRoot = join(base, 'backup');
+  try {
+    await cp(V016_BACKUP_FIXTURE, backupRoot, { recursive: true });
+    await writeFile(join(backupRoot, 'runtime.sqlite-wal'), 'uncheckpointed');
+
+    await assert.rejects(
+      validateOperationalStateBackup(backupRoot),
+      /Backup cannot contain SQLite sidecars/,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test('rejects a v0.1.6 backup missing a table required by that release', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-legacy-table-'));
   const backupRoot = join(base, 'backup');
