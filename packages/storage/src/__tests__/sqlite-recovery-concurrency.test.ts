@@ -14,6 +14,10 @@ import {
   SQLITE_RUNTIME_SCHEMA_VERSION,
   createSqliteRuntimeStore,
 } from '../sqlite-runtime-store.js';
+import {
+  acquireOperationalStateDatabase,
+  inspectOperationalStateSchema,
+} from '../operational-state-store.js';
 import { bindWorkspaceBaselineAuthorityStoreRootInternal } from '../workspace-version-authority-internal.js';
 
 const WORKER_READY_TIMEOUT_MS = 15_000;
@@ -265,18 +269,18 @@ describe('SQLite recovery authority multi-process races', () => {
     });
   });
 
-  it('serializes concurrent schema 6 to the current runtime schema', async () => {
+  it('serializes concurrent operational schema 6 migration', async () => {
     await withPreparedDatabase(async ({ dbPath, startPath }) => {
       const db = new DatabaseSync(dbPath);
       try {
         db.exec(
-          "DROP TABLE runtime_session_event_ordinals; DROP TABLE runtime_partial_segments; DROP TABLE runtime_storage_root_binding; DROP TABLE runtime_workspace_heads; DROP TABLE runtime_workspace_versions; DROP TABLE runtime_workspace_epochs; DROP TABLE headless_task_run_events; DELETE FROM runtime_capabilities WHERE capability = 'runtime_workspace_version_authority'; PRAGMA user_version = 6;",
+          "DROP TRIGGER runtime_events_assign_session_ordinal; DROP TABLE runtime_session_event_ordinals; DROP TABLE runtime_partial_segments; DROP TABLE runtime_storage_root_binding; DROP TABLE runtime_workspace_heads; DROP TABLE runtime_workspace_versions; DROP TABLE runtime_workspace_epochs; DROP TABLE headless_task_run_events; DELETE FROM runtime_capabilities WHERE capability = 'runtime_workspace_version_authority'; PRAGMA user_version = 6;",
         );
       } finally {
         db.close();
       }
 
-      const results = await runOpenWorkers(dbPath, startPath);
+      const results = await runOpenWorkers(dbPath, startPath, 'operational_open_only');
       assert.deepEqual(
         results.map(({ code }) => code),
         [0, 0],
@@ -287,6 +291,12 @@ describe('SQLite recovery authority multi-process races', () => {
         assert.equal(upgraded.schemaVersion(), SQLITE_RUNTIME_SCHEMA_VERSION);
       } finally {
         upgraded.close();
+      }
+      const current = new DatabaseSync(dbPath, { readOnly: true });
+      try {
+        assert.equal(inspectOperationalStateSchema(current).status, 'current');
+      } finally {
+        current.close();
       }
     });
   });
@@ -495,10 +505,11 @@ async function stopWorkers(workers: readonly WorkerHandle[]): Promise<void> {
       child.kill('SIGKILL');
     }
   }
-  await Promise.race([
+  await withTimeout(
     Promise.allSettled(workers.map(({ result }) => result)),
-    new Promise<void>((resolve) => setTimeout(resolve, WORKER_SHUTDOWN_TIMEOUT_MS)),
-  ]);
+    WORKER_SHUTDOWN_TIMEOUT_MS,
+    'workers to stop',
+  ).catch(() => {});
 }
 
 function formatWorkerDiagnostics(worker: WorkerHandle): string {
