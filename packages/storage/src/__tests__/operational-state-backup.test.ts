@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { createSqliteArtifactStore } from '../artifact-store.js';
 import { resolveStorageRoot, type StorageRootKind } from '../root-authority.js';
 import { createSqliteRuntimeStore } from '../sqlite-runtime-store.js';
+import { createSqliteScheduledTaskStore } from '../scheduled-task-store.js';
 import { createSessionStore } from '../session-store.js';
 import { bindWorkspaceBaselineAuthorityStoreRootInternal } from '../workspace-version-authority-internal.js';
 import {
@@ -18,6 +19,12 @@ import {
   restoreOperationalStateBackup,
   validateOperationalStateBackup,
 } from '../operational-state-backup.js';
+
+const V016_BACKUP_FIXTURE = resolve(
+  import.meta.dirname,
+  '../../test-fixtures/v0.1.6-operational-backup/backup',
+);
+const V016_SESSION_ID = '8774e02b-1cff-4d50-90b8-97f78cceaa2a';
 
 test('backs up and restores runtime.sqlite plus artifact bytes', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-'));
@@ -94,31 +101,10 @@ test('backs up and restores runtime.sqlite plus artifact bytes', async () => {
 
 test('restores a v0.1.6 backup as current operational state', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-upgrade-'));
-  const stateRoot = join(base, 'state');
   const backupRoot = join(base, 'backup');
   const restoreRoot = join(base, 'restore');
   try {
-    const sessions = createSessionStore(stateRoot);
-    const session = await sessions.create({
-      projectId: 'project-1',
-      cwd: '/tmp/cwd',
-      backend: 'fake',
-      llmConnectionSlug: 'fake',
-      model: 'fake-model',
-      permissionMode: 'ask',
-      name: 'Legacy backup',
-      labels: [],
-    });
-    await sessions.appendMessage(session.id, {
-      type: 'user',
-      id: 'message-1',
-      turnId: 'turn-1',
-      ts: 1,
-      text: 'survives migration',
-    });
-    await sessions.close?.();
-    await createOperationalStateBackup({ stateRoot, destinationRoot: backupRoot });
-    await rewriteAsV016OperationalBackup(backupRoot);
+    await cp(V016_BACKUP_FIXTURE, backupRoot, { recursive: true });
 
     await restoreOperationalStateBackup({
       backupRoot,
@@ -129,11 +115,29 @@ test('restores a v0.1.6 backup as current operational state', async () => {
 
     const restored = createSessionStore(restoreRoot);
     try {
-      assert.equal((await restored.readMessages(session.id))[0]?.id, 'message-1');
-      assert.equal((await restored.readHeaderSnapshot(session.id)).connectionLocked, true);
+      assert.equal((await restored.readMessages(V016_SESSION_ID))[0]?.id, 'message-v016');
+      const header = await restored.readHeaderSnapshot(V016_SESSION_ID);
+      assert.equal(header.connectionLocked, true);
+      assert.equal(header.workspaceRoot, restoreRoot);
     } finally {
       await restored.close?.();
     }
+    const scheduledTasks = createSqliteScheduledTaskStore(restoreRoot);
+    try {
+      assert.deepEqual((await scheduledTasks.list()).map(({ id }) => id).sort(), [
+        '60999192-d3b2-45b6-affb-e76355d4cf85',
+        'cron-v016',
+      ]);
+    } finally {
+      scheduledTasks.close();
+    }
+    assert.equal(
+      await readFile(
+        join(restoreRoot, 'artifacts', V016_SESSION_ID, 'artifact-v016-sentinel.txt'),
+        'utf8',
+      ),
+      'v0.1.6 artifact',
+    );
   } finally {
     await rm(base, { recursive: true, force: true });
   }
@@ -175,20 +179,16 @@ test('rejects a backup whose SQLite Artifact metadata has no matching payload', 
 
 test('rejects a v0.1.6 backup missing a table required by that release', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-legacy-table-'));
-  const stateRoot = join(base, 'state');
   const backupRoot = join(base, 'backup');
   try {
-    const sessions = createSessionStore(stateRoot);
-    await sessions.close?.();
-    await createOperationalStateBackup({ stateRoot, destinationRoot: backupRoot });
-    await rewriteAsV016OperationalBackup(backupRoot);
+    await cp(V016_BACKUP_FIXTURE, backupRoot, { recursive: true });
     const database = new DatabaseSync(join(backupRoot, 'runtime.sqlite'));
     try {
       database.exec('DROP TABLE core_agent_runs');
     } finally {
       database.close();
     }
-    await refreshDatabaseInventory(backupRoot);
+    await resignDatabaseInventory(backupRoot);
 
     await assert.rejects(
       validateOperationalStateBackup(backupRoot),
@@ -202,40 +202,7 @@ test('rejects a v0.1.6 backup missing a table required by that release', async (
   }
 });
 
-async function rewriteAsV016OperationalBackup(backupRoot: string): Promise<void> {
-  const databasePath = join(backupRoot, 'runtime.sqlite');
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      UPDATE operational_schema_migrations
-      SET version = CASE scope
-        WHEN 'runtime' THEN 10
-        WHEN 'session_metadata' THEN 21
-        WHEN 'core_execution' THEN 1
-        WHEN 'workflow' THEN 3
-        WHEN 'operational' THEN 1
-        ELSE version
-      END;
-      DROP TRIGGER runtime_events_assign_session_ordinal;
-      DROP TRIGGER session_messages_lock_connection;
-      DROP TRIGGER workflow_quote_cleanup_fill_record;
-      DROP TABLE runtime_session_event_ordinals;
-      DROP TABLE core_root_turn_start_rejections;
-      ALTER TABLE workflow_quote_companion_cleanup DROP COLUMN record_json;
-      PRAGMA user_version = 10;
-      UPDATE session_metadata_schema SET version = 21 WHERE scope = 'session_metadata';
-      UPDATE session_metadata
-      SET payload_json = json_set(payload_json, '$.connectionLocked', json('false'));
-      PRAGMA journal_mode = DELETE;
-    `);
-  } finally {
-    database.close();
-  }
-
-  await refreshDatabaseInventory(backupRoot);
-}
-
-async function refreshDatabaseInventory(backupRoot: string): Promise<void> {
+async function resignDatabaseInventory(backupRoot: string): Promise<void> {
   const databasePath = join(backupRoot, 'runtime.sqlite');
   const manifestPath = join(backupRoot, OPERATIONAL_BACKUP_MANIFEST_FILE);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as OperationalBackupManifest;

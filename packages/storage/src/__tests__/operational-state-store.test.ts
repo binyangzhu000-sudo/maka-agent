@@ -17,7 +17,11 @@ import { createSqliteSessionMetadataStore } from '../sqlite-session-metadata-sto
 
 const LEGACY_RUNTIME_SCHEMA_VERSION = 10;
 const LEGACY_SESSION_METADATA_SCHEMA_VERSION = 21;
-const MAIN_WORKFLOW_SCHEMA_VERSION = 5;
+const MAIN_WORKFLOW_SCHEMA_VERSION = 8;
+const WORKFLOW_SCHEDULE_REQUIRED_TABLE_NAMES = [
+  'workflow_scheduled_tasks',
+  'workflow_scheduled_task_fires',
+] as const;
 const SESSION_CATALOG_REQUIRED_TRIGGER_NAMES = [
   'session_catalog_after_insert',
   'session_catalog_after_update',
@@ -120,6 +124,78 @@ test('migrates older operational state without losing sessions or messages', asy
       ]);
     } finally {
       reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('migrates released scheduling state through the operational transaction', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-scheduling-upgrade-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const legacy = new DatabaseSync(databasePath);
+    seedLegacyScheduling(legacy);
+    legacy.close();
+
+    const upgraded = acquireOperationalStateDatabase(root);
+    try {
+      assert.deepEqual(
+        upgraded.database
+          .prepare('SELECT task_id FROM workflow_scheduled_tasks ORDER BY task_id')
+          .all()
+          .map((row) => (row as { task_id: string }).task_id),
+        ['cron-1', 'reminder-1'],
+      );
+      assert.equal(
+        upgraded.database.prepare('SELECT COUNT(*) AS count FROM automation_definitions').get()
+          ?.count,
+        0,
+      );
+      assert.equal(inspectOperationalStateSchema(upgraded.database).status, 'current');
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rolls back every scheduling scope when a legacy cron is in flight', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-scheduling-rollback-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const legacy = new DatabaseSync(databasePath);
+    seedLegacyScheduling(legacy, true);
+    legacy.close();
+
+    assert.throws(
+      () => acquireOperationalStateDatabase(root),
+      /in-flight fire and cannot migrate safely/,
+    );
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.equal(
+        preserved.prepare('SELECT COUNT(*) AS count FROM workflow_plan_reminders').get()?.count,
+        1,
+      );
+      assert.equal(
+        preserved.prepare('SELECT COUNT(*) AS count FROM automation_definitions').get()?.count,
+        1,
+      );
+      assert.equal(
+        preserved
+          .prepare(
+            "SELECT COUNT(*) AS count FROM pragma_table_info('automation_definitions') WHERE name = 'durable'",
+          )
+          .get()?.count,
+        1,
+      );
+    } finally {
+      preserved.close();
     }
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -456,6 +532,21 @@ const incompatibleSchemaCases: ReadonlyArray<{
       );
     },
   },
+  ...WORKFLOW_SCHEDULE_REQUIRED_TABLE_NAMES.map((table) => ({
+    name: `rejects a current schema without ${table}`,
+    error: new RegExp(`required table is missing: ${table}`),
+    prepare(database: DatabaseSync) {
+      database.exec(`DROP TABLE ${table}`);
+    },
+    assertPreserved(database: DatabaseSync) {
+      assert.equal(
+        database
+          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(table),
+        undefined,
+      );
+    },
+  })),
   ...SESSION_CATALOG_REQUIRED_TRIGGER_NAMES.map((trigger) => ({
     name: `rejects a current schema without ${trigger}`,
     error: new RegExp(`required trigger is missing: ${trigger}`),
@@ -501,6 +592,124 @@ function rewindRuntimeSchema(database: DatabaseSync): void {
   database.exec('DROP TRIGGER runtime_events_assign_session_ordinal');
   database.exec('DROP TABLE runtime_session_event_ordinals');
   database.exec(`PRAGMA user_version = ${LEGACY_RUNTIME_SCHEMA_VERSION}`);
+}
+
+function seedLegacyScheduling(database: DatabaseSync, pendingCron = false): void {
+  database.exec(`
+    DROP TABLE workflow_scheduled_task_fires;
+    DROP TABLE workflow_scheduled_tasks;
+    CREATE TABLE workflow_plan_reminders (
+      reminder_id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      record_json TEXT NOT NULL
+    );
+    DROP TABLE automation_pending_fires;
+    DROP TABLE automation_definitions;
+    DROP TABLE automation_authority_state;
+    CREATE TABLE automation_authority_state (
+      singleton INTEGER PRIMARY KEY,
+      revision INTEGER NOT NULL
+    );
+    INSERT INTO automation_authority_state VALUES (1, 1);
+    CREATE TABLE automation_definitions (
+      automation_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      durable INTEGER NOT NULL,
+      record_json TEXT NOT NULL
+    );
+    CREATE TABLE automation_pending_fires (
+      fire_id TEXT PRIMARY KEY,
+      automation_id TEXT NOT NULL UNIQUE,
+      target_session_id TEXT NOT NULL,
+      admitted_at INTEGER NOT NULL,
+      record_json TEXT NOT NULL
+    );
+    UPDATE operational_schema_migrations
+    SET version = CASE scope
+      WHEN 'workflow' THEN 3
+      WHEN 'automation' THEN 1
+      ELSE version
+    END;
+  `);
+  database.prepare('INSERT INTO workflow_plan_reminders VALUES (?, ?, ?, ?)').run(
+    'reminder-1',
+    1,
+    2,
+    JSON.stringify({
+      id: 'reminder-1',
+      title: 'Follow up',
+      note: 'Review the result',
+      schedule: { kind: 'once', runAt: 10 },
+      delivery: { channel: 'local' },
+      enabled: true,
+      status: 'scheduled',
+      createdAt: 1,
+      updatedAt: 2,
+      nextRunAt: 10,
+      runCount: 0,
+      runs: [],
+    }),
+  );
+  database.prepare('INSERT INTO automation_definitions VALUES (?, ?, ?, ?, ?, ?)').run(
+    'cron-1',
+    'session-1',
+    1,
+    'active',
+    1,
+    JSON.stringify({
+      id: 'cron-1',
+      kind: 'cron',
+      name: 'Daily report',
+      status: 'active',
+      prompt: 'Prepare the report',
+      sessionId: 'session-1',
+      schedule: { type: 'cron', expression: '0 9 * * *' },
+      createdAt: 1,
+      updatedAt: 2,
+      nextFireAt: 10,
+      lastFireAt: null,
+      lastRunId: null,
+      fireCount: 0,
+      maxFires: null,
+      expiresAt: null,
+      lastError: null,
+      consecutiveFailures: 0,
+      durable: true,
+      execution: {
+        cwd: '/workspace',
+        backend: 'fake',
+        llmConnectionSlug: 'test',
+        model: 'test-model',
+        collaborationMode: 'agent',
+        orchestrationMode: 'default',
+      },
+    }),
+  );
+  if (!pendingCron) return;
+  database.prepare('INSERT INTO automation_pending_fires VALUES (?, ?, ?, ?, ?)').run(
+    'fire-1',
+    'cron-1',
+    'session-1',
+    10,
+    JSON.stringify({
+      id: 'fire-1',
+      automationId: 'cron-1',
+      automationKind: 'cron',
+      automationName: 'Daily report',
+      prompt: 'Prepare the report',
+      scheduledFor: 10,
+      targetSessionId: 'session-1',
+      turnId: 'turn-1',
+      runId: 'run-1',
+      userMessageId: 'message-1',
+      status: 'admitted',
+      admittedAt: 10,
+      updatedAt: 10,
+    }),
+  );
 }
 
 function assertLegacyRuntimeVersion(database: DatabaseSync): void {

@@ -1,6 +1,19 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 export const SQLITE_CORE_EXECUTION_SCHEMA_VERSION = 2;
+export const SQLITE_CORE_EXECUTION_REQUIRED_TABLES = [
+  ['core_agent_runs', 1],
+  ['core_agent_run_events', 1],
+  ['core_agent_run_projections', 1],
+  ['core_root_turn_admissions', 1],
+  ['core_root_turn_start_rejections', 2],
+  ['core_root_source_message_proofs', 1],
+  ['core_interaction_requests', 1],
+  ['core_interaction_outcomes', 1],
+  ['core_message_host_epochs', 1],
+  ['core_message_receipts', 1],
+  ['core_shell_runs', 1],
+] as const;
 
 export function migrateSqliteCoreExecutionDatabase(db: DatabaseSync): void {
   db.exec(`

@@ -1,6 +1,31 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 export const SQLITE_SESSION_METADATA_SCHEMA_VERSION = 23;
+export const SQLITE_SESSION_METADATA_REQUIRED_TABLES = [
+  ['session_metadata_schema', 1],
+  ['session_metadata', 1],
+  ['session_metadata_labels', 1],
+  ['session_metadata_tombstones', 1],
+  ['subagent_spawns', 1],
+  ['agent_graph_intent_claims', 1],
+  ['agent_graph_schedule_updates', 1],
+  ['agent_graph_operator_provisions', 1],
+  ['agent_graph_client_projections', 1],
+  ['agent_graph_client_operator_projections', 1],
+  ['agent_graph_client_terminal_activity', 1],
+  ['agent_graph_client_applied_records', 1],
+  ['agent_graph_supervisor_wakes', 1],
+  ['agent_graph_supervisor_wake_attempts', 1],
+  ['sandbox_boundary_log', 1],
+  ['session_create_claims', 1],
+  ['session_catalog_state', 1],
+  ['session_catalog_projection', 1],
+  ['session_catalog_label_projection', 1],
+  ['session_messages', 1],
+  ['projects', 1],
+  ['project_locations', 1],
+  ['project_aliases', 1],
+] as const;
 
 const SESSION_MESSAGES_LOCK_CONNECTION_TRIGGER = `
   CREATE TRIGGER session_messages_lock_connection

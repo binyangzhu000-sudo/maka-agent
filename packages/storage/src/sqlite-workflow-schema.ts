@@ -1,6 +1,24 @@
 import type { DatabaseSync } from 'node:sqlite';
+import {
+  insertMigratedScheduledTasks,
+  readLegacyPlanReminderTasks,
+} from './sqlite-legacy-scheduling.js';
 
 export const SQLITE_WORKFLOW_SCHEMA_VERSION = 9;
+export const SQLITE_WORKFLOW_REQUIRED_TABLES = [
+  ['workflow_task_ledger_events', 1],
+  ['workflow_task_ledger_projections', 1],
+  ['workflow_plan_events', 1],
+  ['workflow_plan_projections', 1],
+  ['workflow_deep_research_events', 1],
+  ['workflow_quote_companion_cleanup', 1],
+  ['workflow_daily_review_state', 1],
+  ['workflow_daily_review_authority_state', 3],
+  ['workflow_daily_review_archives', 1],
+  ['workflow_goal_authority', 5],
+  ['workflow_scheduled_tasks', 8],
+  ['workflow_scheduled_task_fires', 8],
+] as const;
 
 const WORKFLOW_QUOTE_CLEANUP_FILL_RECORD_TRIGGER = `
   CREATE TRIGGER IF NOT EXISTS workflow_quote_cleanup_fill_record
@@ -28,6 +46,7 @@ export const SQLITE_WORKFLOW_REQUIRED_TRIGGERS = [
 ] as const;
 
 export function migrateSqliteWorkflowDatabase(db: DatabaseSync): void {
+  const legacyPlanReminders = readLegacyPlanReminderTasks(db);
   db.exec(`
     DROP INDEX IF EXISTS workflow_plan_reminders_order;
     DROP TABLE IF EXISTS workflow_plan_reminders;
@@ -152,4 +171,5 @@ export function migrateSqliteWorkflowDatabase(db: DatabaseSync): void {
   db.exec(`
     ${WORKFLOW_QUOTE_CLEANUP_FILL_RECORD_TRIGGER};
   `);
+  insertMigratedScheduledTasks(db, legacyPlanReminders);
 }

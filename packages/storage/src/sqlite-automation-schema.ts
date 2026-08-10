@@ -1,8 +1,18 @@
 import type { DatabaseSync } from 'node:sqlite';
+import {
+  insertMigratedAutomationState,
+  readLegacyAutomationMigration,
+} from './sqlite-legacy-scheduling.js';
 
 export const SQLITE_AUTOMATION_SCHEMA_VERSION = 2;
+export const SQLITE_AUTOMATION_REQUIRED_TABLES = [
+  ['automation_authority_state', 1],
+  ['automation_definitions', 1],
+  ['automation_pending_fires', 1],
+] as const;
 
 export function migrateSqliteAutomationDatabase(db: DatabaseSync): void {
+  const legacy = readLegacyAutomationMigration(db);
   const legacyDefinition = db
     .prepare(
       "SELECT 1 AS present FROM pragma_table_info('automation_definitions') WHERE name = 'durable'",
@@ -49,4 +59,5 @@ export function migrateSqliteAutomationDatabase(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS automation_pending_fires_order
       ON automation_pending_fires(admitted_at, fire_id);
   `);
+  insertMigratedAutomationState(db, legacy);
 }

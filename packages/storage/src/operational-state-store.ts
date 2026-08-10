@@ -7,31 +7,41 @@ import {
   configureSqliteRuntimeLockWait,
   migrateSqliteRuntimeDatabase,
   readUserVersion,
+  SQLITE_RUNTIME_REQUIRED_TABLES,
   SQLITE_RUNTIME_REQUIRED_TRIGGERS,
   SQLITE_RUNTIME_SCHEMA_VERSION,
 } from './sqlite-runtime-schema.js';
 import {
   migrateSqliteSessionMetadataDatabase,
   readSqliteSessionMetadataSchemaVersion,
+  SQLITE_SESSION_METADATA_REQUIRED_TABLES,
   SQLITE_SESSION_METADATA_REQUIRED_TRIGGERS,
   SQLITE_SESSION_METADATA_SCHEMA_VERSION,
 } from './sqlite-session-metadata-schema.js';
 import {
   migrateSqliteCoreExecutionDatabase,
+  SQLITE_CORE_EXECUTION_REQUIRED_TABLES,
   SQLITE_CORE_EXECUTION_SCHEMA_VERSION,
 } from './sqlite-core-execution-schema.js';
 import {
   migrateSqliteWorkflowDatabase,
+  SQLITE_WORKFLOW_REQUIRED_TABLES,
   SQLITE_WORKFLOW_REQUIRED_TRIGGERS,
   SQLITE_WORKFLOW_SCHEMA_VERSION,
 } from './sqlite-workflow-schema.js';
-import { migrateSqliteUsageDatabase, SQLITE_USAGE_SCHEMA_VERSION } from './sqlite-usage-schema.js';
+import {
+  migrateSqliteUsageDatabase,
+  SQLITE_USAGE_REQUIRED_TABLES,
+  SQLITE_USAGE_SCHEMA_VERSION,
+} from './sqlite-usage-schema.js';
 import {
   migrateSqliteArtifactDatabase,
+  SQLITE_ARTIFACT_REQUIRED_TABLES,
   SQLITE_ARTIFACT_SCHEMA_VERSION,
 } from './sqlite-artifact-schema.js';
 import {
   migrateSqliteAutomationDatabase,
+  SQLITE_AUTOMATION_REQUIRED_TABLES,
   SQLITE_AUTOMATION_SCHEMA_VERSION,
 } from './sqlite-automation-schema.js';
 import {
@@ -68,92 +78,29 @@ const REQUIRED_SCHEMA_TRIGGERS = [
   ...SQLITE_WORKFLOW_REQUIRED_TRIGGERS.map((trigger) => ({ ...trigger, scope: 'workflow' })),
 ] as const;
 
-const RUNTIME_SCHEMA_TABLES = [
-  'runtime_events',
-  'runtime_session_event_ordinals',
-  'tool_journal_events',
-  'tool_operations',
-  'runtime_partial_snapshots',
-  'runtime_partial_segments',
-  'runtime_capabilities',
-  'runtime_storage_root_binding',
-  'runtime_continuation_claims',
-  'runtime_workspace_epochs',
-  'runtime_workspace_versions',
-  'runtime_workspace_heads',
-  'headless_task_run_events',
-] as const;
+function requiredTables<const T extends readonly (readonly [string, number])[]>(
+  scope: string,
+  tables: T,
+) {
+  return tables.map(([name, introducedIn]) => ({ scope, name, introducedIn }));
+}
 
-const RUNTIME_SCHEMA_TABLE_NAMES = new Set<string>(RUNTIME_SCHEMA_TABLES);
+const RUNTIME_REQUIRED_SCHEMA_TABLES = requiredTables('runtime', SQLITE_RUNTIME_REQUIRED_TABLES);
 
 const REQUIRED_SCHEMA_TABLES = [
-  'operational_schema_migrations',
-  ...RUNTIME_SCHEMA_TABLES,
-  'session_metadata_schema',
-  'session_metadata',
-  'session_metadata_labels',
-  'session_metadata_tombstones',
-  'subagent_spawns',
-  'agent_graph_intent_claims',
-  'agent_graph_schedule_updates',
-  'agent_graph_operator_provisions',
-  'agent_graph_client_projections',
-  'agent_graph_client_operator_projections',
-  'agent_graph_client_terminal_activity',
-  'agent_graph_client_applied_records',
-  'agent_graph_supervisor_wakes',
-  'agent_graph_supervisor_wake_attempts',
-  'sandbox_boundary_log',
-  'session_create_claims',
-  'session_catalog_state',
-  'session_catalog_projection',
-  'session_catalog_label_projection',
-  'session_messages',
-  'projects',
-  'project_locations',
-  'project_aliases',
-  'core_agent_runs',
-  'core_agent_run_events',
-  'core_agent_run_projections',
-  'core_root_turn_admissions',
-  'core_root_turn_start_rejections',
-  'core_root_source_message_proofs',
-  'core_interaction_requests',
-  'core_interaction_outcomes',
-  'core_message_host_epochs',
-  'core_message_receipts',
-  'core_shell_runs',
-  'workflow_task_ledger_events',
-  'workflow_task_ledger_projections',
-  'workflow_plan_events',
-  'workflow_plan_projections',
-  'workflow_deep_research_events',
-  'workflow_plan_reminders',
-  'workflow_quote_companion_cleanup',
-  'workflow_daily_review_state',
-  'workflow_daily_review_authority_state',
-  'workflow_daily_review_archives',
-  'workflow_goal_authority',
-  'usage_llm_calls',
-  'usage_tool_invocations',
-  'usage_model_call_attempts',
-  'usage_model_call_reprojection',
-  'usage_pricing_authority',
-  'usage_pricing_overrides',
-  'artifact_records',
-  'automation_authority_state',
-  'automation_definitions',
-  'automation_pending_fires',
+  { scope: 'operational', name: 'operational_schema_migrations', introducedIn: 1 },
+  ...RUNTIME_REQUIRED_SCHEMA_TABLES,
+  ...requiredTables('session_metadata', SQLITE_SESSION_METADATA_REQUIRED_TABLES),
+  ...requiredTables('core_execution', SQLITE_CORE_EXECUTION_REQUIRED_TABLES),
+  ...requiredTables('workflow', SQLITE_WORKFLOW_REQUIRED_TABLES),
+  ...requiredTables('usage', SQLITE_USAGE_REQUIRED_TABLES),
+  ...requiredTables('artifact', SQLITE_ARTIFACT_REQUIRED_TABLES),
+  ...requiredTables('automation', SQLITE_AUTOMATION_REQUIRED_TABLES),
 ] as const;
 
-const SCHEMA_TABLE_INTRODUCTIONS = new Map<string, readonly [scope: string, version: number]>([
-  ['runtime_storage_root_binding', ['runtime', 9]],
-  ['runtime_partial_segments', ['runtime', 10]],
-  ['runtime_session_event_ordinals', ['runtime', 11]],
-  ['core_root_turn_start_rejections', ['core_execution', 2]],
-  ['workflow_daily_review_authority_state', ['workflow', 3]],
-  ['workflow_goal_authority', ['workflow', 5]],
-]);
+const RUNTIME_SCHEMA_TABLE_NAMES = new Set<string>(
+  SQLITE_RUNTIME_REQUIRED_TABLES.map(([name]) => name),
+);
 
 const require = createRequire(import.meta.url);
 const owners = new Map<string, OperationalStateDatabaseOwner>();
@@ -351,7 +298,7 @@ export function inspectOperationalStateSchema(
       return { status: 'needs_migration', versions };
     }
     if (runtimeVersion === SQLITE_RUNTIME_SCHEMA_VERSION && hasOnlyRuntimeSchemaTables(database)) {
-      assertRequiredSchemaTables(database, versions, RUNTIME_SCHEMA_TABLES);
+      assertRequiredSchemaTables(database, versions, RUNTIME_REQUIRED_SCHEMA_TABLES);
       assertRequiredSchemaTriggers(database, versions);
       return { status: 'needs_migration', versions };
     }
@@ -426,16 +373,19 @@ function assertOperationalSchemaRegistryDefinition(database: DatabaseSync): void
 function assertRequiredSchemaTables(
   database: DatabaseSync,
   versions: ReadonlyMap<string, number>,
-  tables: readonly string[] = REQUIRED_SCHEMA_TABLES,
+  tables: readonly {
+    scope: string;
+    name: string;
+    introducedIn: number;
+  }[] = REQUIRED_SCHEMA_TABLES,
 ): void {
   const tableExists = database.prepare(
     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
   );
   for (const table of tables) {
-    const introduction = SCHEMA_TABLE_INTRODUCTIONS.get(table);
-    if (introduction && (versions.get(introduction[0]) ?? -1) < introduction[1]) continue;
-    if (tableExists.get(table) === undefined) {
-      throw new Error(`required table is missing: ${table}`);
+    if ((versions.get(table.scope) ?? -1) < table.introducedIn) continue;
+    if (tableExists.get(table.name) === undefined) {
+      throw new Error(`required table is missing: ${table.name}`);
     }
   }
 }

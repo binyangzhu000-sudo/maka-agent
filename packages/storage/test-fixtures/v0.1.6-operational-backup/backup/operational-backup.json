@@ -1,0 +1,17 @@
+{
+  "format": "maka-operational-backup",
+  "schemaVersion": 3,
+  "createdAt": 100,
+  "files": [
+    {
+      "path": "artifacts/8774e02b-1cff-4d50-90b8-97f78cceaa2a/artifact-v016-sentinel.txt",
+      "size": 15,
+      "sha256": "sha256:c1550cc0278822d09ae1c981bf5b853599b7e85df2ad1b22fae7d8ad13a7025a"
+    },
+    {
+      "path": "runtime.sqlite",
+      "size": 905216,
+      "sha256": "sha256:634d514c07df704b7f30794e5fd5aa53221b20e2833e036cdb166dfe663221e5"
+    }
+  ]
+}

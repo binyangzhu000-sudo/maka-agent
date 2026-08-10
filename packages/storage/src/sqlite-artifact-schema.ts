@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 export const SQLITE_ARTIFACT_SCHEMA_VERSION = 1;
+export const SQLITE_ARTIFACT_REQUIRED_TABLES = [['artifact_records', 1]] as const;
 
 export function migrateSqliteArtifactDatabase(db: DatabaseSync): void {
   db.exec(`

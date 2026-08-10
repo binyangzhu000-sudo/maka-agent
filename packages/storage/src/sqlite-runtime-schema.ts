@@ -1,6 +1,21 @@
 import type { DatabaseSync } from 'node:sqlite';
 
 export const SQLITE_RUNTIME_SCHEMA_VERSION = 12;
+export const SQLITE_RUNTIME_REQUIRED_TABLES = [
+  ['runtime_events', 1],
+  ['tool_journal_events', 1],
+  ['tool_operations', 1],
+  ['runtime_partial_snapshots', 1],
+  ['runtime_partial_segments', 10],
+  ['runtime_capabilities', 1],
+  ['runtime_storage_root_binding', 9],
+  ['runtime_continuation_claims', 1],
+  ['runtime_workspace_epochs', 1],
+  ['runtime_workspace_versions', 1],
+  ['runtime_workspace_heads', 1],
+  ['headless_task_run_events', 1],
+  ['runtime_session_event_ordinals', 11],
+] as const;
 export const RUNTIME_RECOVERY_AUTHORITY_CAPABILITY = 'runtime_recovery_authority';
 export const RUNTIME_RECOVERY_AUTHORITY_CAPABILITY_VERSION = 1;
 export const RUNTIME_CONTINUATION_AUTHORITY_CAPABILITY = 'runtime_continuation_authority';
