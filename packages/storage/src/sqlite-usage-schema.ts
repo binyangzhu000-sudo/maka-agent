@@ -4,8 +4,8 @@ export const SQLITE_USAGE_SCHEMA_VERSION = 3;
 export const SQLITE_USAGE_REQUIRED_TABLES = [
   ['usage_llm_calls', 1],
   ['usage_tool_invocations', 1],
-  ['usage_model_call_attempts', 1],
-  ['usage_model_call_reprojection', 1],
+  ['usage_model_call_attempts', 3],
+  ['usage_model_call_reprojection', 3],
   ['usage_pricing_authority', 1],
   ['usage_pricing_overrides', 1],
 ] as const;

@@ -12,6 +12,7 @@ import {
   normalizeAutomationDefinitionRecord,
   normalizeAutomationPendingFireRecord,
 } from './automation-record-codec.js';
+import { canonicalizeLegacyCronExpression } from './legacy-cron-expression.js';
 
 export interface LegacyAutomationMigration {
   readonly revision: number;
@@ -42,7 +43,7 @@ export function readLegacyAutomationMigration(
       ORDER BY created_at, automation_id
     `)
     .all()
-    .map(decodeLegacyAutomationDefinition);
+    .map((row) => decodeLegacyAutomationDefinition(database, row));
   const byId = new Map(
     targets.map((target) => [
       target.kind === 'automation' ? target.definition.id : target.task.id,
@@ -139,11 +140,17 @@ export function insertMigratedScheduledTasks(
   }
 }
 
-function decodeLegacyAutomationDefinition(value: unknown): LegacyAutomationTarget {
+function decodeLegacyAutomationDefinition(
+  database: DatabaseSync,
+  value: unknown,
+): LegacyAutomationTarget {
   const row = requireRecord(value, 'legacy Automation definition row');
   const record = parseRecord(row.record_json, 'legacy Automation definition');
   const { kind, durable, execution, ...currentRecord } = record;
-  const definition = normalizeAutomationDefinitionRecord(currentRecord);
+  const definition = normalizeAutomationDefinitionRecord({
+    ...currentRecord,
+    schedule: canonicalizeLegacyAutomationSchedule(currentRecord.schedule),
+  });
   if (
     row.automation_id !== definition.id ||
     row.session_id !== definition.sessionId ||
@@ -156,12 +163,48 @@ function decodeLegacyAutomationDefinition(value: unknown): LegacyAutomationTarge
   if (kind === 'heartbeat' && durable !== true && execution === undefined) {
     return { kind: 'automation', definition };
   }
-  if (kind !== 'cron' || durable !== true) {
+  if (kind !== 'cron') {
     throw new Error(`Invalid legacy Automation kind: ${definition.id}`);
   }
   return {
     kind: 'scheduled_task',
-    task: convertLegacyCronAutomation(execution, definition),
+    task: convertLegacyCronAutomation(
+      execution ?? readLegacyAutomationExecution(database, definition.sessionId),
+      definition,
+    ),
+  };
+}
+
+function readLegacyAutomationExecution(database: DatabaseSync, sessionId: string): unknown {
+  if (!hasTable(database, 'session_metadata')) {
+    throw new Error(`Legacy cron Automation has no creator Session: ${sessionId}`);
+  }
+  const row = database
+    .prepare('SELECT payload_json FROM session_metadata WHERE session_id = ?')
+    .get(sessionId) as { payload_json?: unknown } | undefined;
+  if (!row) throw new Error(`Legacy cron Automation has no creator Session: ${sessionId}`);
+  const header = parseRecord(row.payload_json, 'legacy cron creator Session');
+  return {
+    cwd: header.cwd,
+    ...(header.projectId === undefined ? {} : { projectId: header.projectId }),
+    backend: header.backend,
+    llmConnectionSlug: header.llmConnectionSlug,
+    model: header.model,
+    ...(header.thinkingLevel === undefined ? {} : { thinkingLevel: header.thinkingLevel }),
+    collaborationMode: header.collaborationMode ?? 'agent',
+    orchestrationMode: header.orchestrationMode ?? 'default',
+  };
+}
+
+function canonicalizeLegacyAutomationSchedule(value: unknown): unknown {
+  const schedule = requireRecord(value, 'legacy Automation schedule');
+  if (schedule.type !== 'cron') return schedule;
+  return {
+    ...schedule,
+    expression: canonicalizeLegacyCronExpression(
+      requireString(schedule.expression, 'legacy Automation cron expression'),
+      'automation-v1',
+    ),
   };
 }
 
@@ -235,7 +278,7 @@ function convertLegacyCronSchedule(definition: AutomationDefinition): ScheduledT
   if (definition.schedule.type === 'cron') {
     return {
       kind: 'cron',
-      expression: definition.schedule.expression,
+      expression: canonicalizeLegacyCronExpression(definition.schedule.expression, 'automation-v1'),
       startAt: definition.createdAt,
     };
   }
@@ -353,7 +396,10 @@ function decodeLegacyReminderSchedule(value: unknown): ScheduledTask['schedule']
   if (schedule.kind === 'cron') {
     return {
       kind: 'cron',
-      expression: requireString(schedule.expression, 'legacy plan reminder cron expression'),
+      expression: canonicalizeLegacyCronExpression(
+        requireString(schedule.expression, 'legacy plan reminder cron expression'),
+        'plan-reminder-v1',
+      ),
       startAt: requireNonnegativeInteger(schedule.startAt, 'legacy plan reminder startAt'),
     };
   }

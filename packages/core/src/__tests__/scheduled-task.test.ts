@@ -127,6 +127,32 @@ describe('scheduled-task catalog', () => {
     });
   });
 
+  it('resumes an overdue one-shot task immediately', () => {
+    const task: ScheduledTask = {
+      id: 'overdue',
+      title: 'Overdue',
+      intent: { kind: 'text', body: '' },
+      schedule: { kind: 'once', runAt: 60_000 },
+      effect: { kind: 'notify', channel: 'local' },
+      status: 'paused',
+      nextFireAt: null,
+      lastFireAt: null,
+      fireCount: 0,
+      maxFires: null,
+      expiresAt: null,
+      createdBy: { kind: 'user' },
+      createdAt: 0,
+      updatedAt: 60_000,
+      runs: [],
+      lastError: null,
+    };
+
+    const resumed = resumeScheduledTask(task, 120_000);
+
+    assert.ok(!('error' in resumed));
+    if (!('error' in resumed)) assert.equal(resumed.nextFireAt, 120_000);
+  });
+
   it('rejects numeric-string coercion and non-canonical cron spacing', () => {
     const now = Date.UTC(2026, 0, 5, 8, 0, 0);
     for (const schedule of [

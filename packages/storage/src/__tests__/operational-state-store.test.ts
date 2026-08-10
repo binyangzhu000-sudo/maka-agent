@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { constants, DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import type { SessionHeader } from '@maka/core';
 import {
@@ -84,6 +84,33 @@ test('preserves operational state when every schema is current', async () => {
     );
     reopened.close();
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('inspects one schema snapshot while another connection initializes the database', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-inspection-snapshot-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  const reader = new DatabaseSync(databasePath);
+  const writer = new DatabaseSync(databasePath);
+  try {
+    reader.exec('PRAGMA journal_mode = WAL');
+    writer.exec('PRAGMA journal_mode = WAL');
+    let initialized = false;
+    reader.setAuthorizer((actionCode, tableName) => {
+      if (!initialized && actionCode === constants.SQLITE_READ && tableName === 'sqlite_master') {
+        initialized = true;
+        writer.exec('CREATE TABLE concurrent_initialization_sentinel (value TEXT)');
+      }
+      return constants.SQLITE_OK;
+    });
+
+    assert.equal(inspectOperationalStateSchema(reader).status, 'needs_migration');
+    assert.equal(initialized, true);
+  } finally {
+    reader.setAuthorizer(null);
+    writer.close();
+    reader.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -587,6 +614,53 @@ for (const contract of incompatibleSchemaCases) {
     }
   });
 }
+
+test('rejects a released workflow schema without its reminder catalog', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-missing-reminders-'));
+  try {
+    const lease = acquireOperationalStateDatabase(root);
+    seedLegacyScheduling(lease.database);
+    lease.database.exec('DROP TABLE workflow_plan_reminders');
+    lease.close();
+
+    assert.throws(
+      () => acquireOperationalStateDatabase(root),
+      /required table is missing: workflow_plan_reminders/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('accepts a released runtime schema before later tables were introduced', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-early-runtime-'));
+  try {
+    const lease = acquireOperationalStateDatabase(root);
+    lease.database.exec(`
+      DROP TRIGGER runtime_events_assign_session_ordinal;
+      DROP TRIGGER runtime_event_ordinal_retry;
+      DROP TABLE runtime_partial_segments;
+      DROP TABLE runtime_capabilities;
+      DROP TABLE runtime_storage_root_binding;
+      DROP TABLE runtime_continuation_claims;
+      DROP TABLE runtime_workspace_epochs;
+      DROP TABLE runtime_workspace_versions;
+      DROP TABLE runtime_workspace_heads;
+      DROP TABLE headless_task_run_events;
+      DROP TABLE runtime_session_event_ordinals;
+      PRAGMA user_version = 4;
+      UPDATE operational_schema_migrations SET version = 4 WHERE scope = 'runtime';
+    `);
+    assert.equal(inspectOperationalStateSchema(lease.database).status, 'needs_migration');
+    lease.close();
+
+    const upgraded = acquireOperationalStateDatabase(root);
+    assert.equal(inspectOperationalStateSchema(upgraded.database).status, 'current');
+    upgraded.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function rewindRuntimeSchema(database: DatabaseSync): void {
   database.exec('DROP TRIGGER runtime_events_assign_session_ordinal');

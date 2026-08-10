@@ -319,7 +319,10 @@ export function resumeScheduledTask(
       updatedAt: now,
     };
   }
-  const nextFireAt = computeNextFireAt(task.schedule, now);
+  const nextFireAt =
+    task.schedule.kind === 'once'
+      ? Math.max(task.schedule.runAt, now)
+      : computeNextFireAt(task.schedule, now);
   if (nextFireAt === null) {
     return { error: 'Schedule has no remaining fire' };
   }

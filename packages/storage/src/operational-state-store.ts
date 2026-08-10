@@ -78,11 +78,16 @@ const REQUIRED_SCHEMA_TRIGGERS = [
   ...SQLITE_WORKFLOW_REQUIRED_TRIGGERS.map((trigger) => ({ ...trigger, scope: 'workflow' })),
 ] as const;
 
-function requiredTables<const T extends readonly (readonly [string, number])[]>(
+function requiredTables<const T extends readonly (readonly [string, number, number?])[]>(
   scope: string,
   tables: T,
 ) {
-  return tables.map(([name, introducedIn]) => ({ scope, name, introducedIn }));
+  return tables.map(([name, introducedIn, removedIn]) => ({
+    scope,
+    name,
+    introducedIn,
+    removedIn,
+  }));
 }
 
 const RUNTIME_REQUIRED_SCHEMA_TABLES = requiredTables('runtime', SQLITE_RUNTIME_REQUIRED_TABLES);
@@ -274,6 +279,21 @@ export interface OperationalStateSchemaInspection {
 export function inspectOperationalStateSchema(
   database: DatabaseSync,
 ): OperationalStateSchemaInspection {
+  if (database.isTransaction) return inspectOperationalStateSchemaInternal(database);
+  database.exec('BEGIN');
+  try {
+    const inspection = inspectOperationalStateSchemaInternal(database);
+    database.exec('COMMIT');
+    return inspection;
+  } catch (error) {
+    rollback(database);
+    throw error;
+  }
+}
+
+function inspectOperationalStateSchemaInternal(
+  database: DatabaseSync,
+): OperationalStateSchemaInspection {
   let needsMigration = false;
   const runtimeVersion = readUserVersion(database);
   const versions = new Map<string, number>([['runtime', runtimeVersion]]);
@@ -377,13 +397,15 @@ function assertRequiredSchemaTables(
     scope: string;
     name: string;
     introducedIn: number;
+    removedIn?: number;
   }[] = REQUIRED_SCHEMA_TABLES,
 ): void {
   const tableExists = database.prepare(
     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
   );
   for (const table of tables) {
-    if ((versions.get(table.scope) ?? -1) < table.introducedIn) continue;
+    const version = versions.get(table.scope) ?? -1;
+    if (version < table.introducedIn || version >= (table.removedIn ?? Infinity)) continue;
     if (tableExists.get(table.name) === undefined) {
       throw new Error(`required table is missing: ${table.name}`);
     }
