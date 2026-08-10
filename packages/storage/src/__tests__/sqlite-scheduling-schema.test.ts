@@ -452,6 +452,94 @@ describe('SQLite scheduling schema', () => {
     }
   });
 
+  test('does not bypass released Client Capability prerequisites', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            capabilityRequirements: [
+              {
+                principalId: 'principal-1',
+                clientInstanceId: 'client-1',
+                contractId: 'contract-1',
+              },
+            ],
+            waiting: {
+              reason: 'client_capability_provider_unavailable',
+              since: 50_000,
+              message: 'Provider is unavailable.',
+            },
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.status, 'paused');
+      assert.equal(task.nextFireAt, null);
+      assert.deepEqual(task.effect, {
+        kind: 'agent_run_unavailable',
+        reason: 'Client Capability prerequisites require reconfiguration.',
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  test('completes an unavailable released one-shot whose fire budget is spent', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(
+          JSON.stringify({
+            ...JSON.parse(row.record_json),
+            schedule: { type: 'once', delaySeconds: 60 },
+            fireCount: 1,
+            nextFireAt: null,
+            capabilityRequirements: [
+              {
+                principalId: 'principal-1',
+                clientInstanceId: 'client-1',
+                contractId: 'contract-1',
+              },
+            ],
+          }),
+          'legacy-cron',
+        );
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.status, 'completed');
+      assert.equal(task.nextFireAt, null);
+    } finally {
+      database.close();
+    }
+  });
+
   test('preserves a released cron AgentRun identity', () => {
     const database = new DatabaseSync(':memory:');
     try {

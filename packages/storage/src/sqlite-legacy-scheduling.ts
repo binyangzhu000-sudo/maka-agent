@@ -295,6 +295,12 @@ function convertLegacyCronAutomation(
   execution: unknown,
   definition: AutomationDefinition,
 ): ScheduledTask {
+  const unavailableReason =
+    execution === undefined
+      ? UNAVAILABLE_EXECUTION_MESSAGE
+      : definition.capabilityRequirements?.length || definition.waiting
+        ? UNAVAILABLE_CAPABILITY_MESSAGE
+        : undefined;
   const lastRun =
     definition.lastRunId === null || definition.lastFireAt === null
       ? []
@@ -313,18 +319,17 @@ function convertLegacyCronAutomation(
     intent: { kind: 'text', body: definition.prompt },
     schedule: convertLegacyCronSchedule(definition),
     effect:
-      execution === undefined
+      unavailableReason !== undefined
         ? {
             kind: 'agent_run_unavailable',
-            reason: UNAVAILABLE_EXECUTION_MESSAGE,
+            reason: unavailableReason,
           }
         : {
             kind: 'agent_run',
             execution: decodeLegacyAutomationExecution(execution),
           },
-    status:
-      execution === undefined && definition.status === 'active' ? 'paused' : definition.status,
-    nextFireAt: execution === undefined ? null : definition.nextFireAt,
+    status: definition.status,
+    nextFireAt: unavailableReason !== undefined ? null : definition.nextFireAt,
     lastFireAt: definition.lastFireAt,
     fireCount: definition.fireCount,
     maxFires: definition.maxFires,
@@ -333,13 +338,13 @@ function convertLegacyCronAutomation(
     createdAt: definition.createdAt,
     updatedAt: definition.updatedAt,
     runs: lastRun,
-    lastError:
-      definition.lastError ?? (execution === undefined ? UNAVAILABLE_EXECUTION_MESSAGE : null),
+    lastError: definition.lastError ?? unavailableReason ?? null,
   };
 }
 
 const UNAVAILABLE_EXECUTION_MESSAGE =
   'Creator Session unavailable; execution settings are unknown.';
+const UNAVAILABLE_CAPABILITY_MESSAGE = 'Client Capability prerequisites require reconfiguration.';
 
 const INTERRUPTED_FIRE_MESSAGE =
   'Interrupted during upgrade before the fire outcome was recorded; not re-run.';
@@ -365,6 +370,14 @@ function reconcileInterruptedLegacyTask(task: ScheduledTask, now: number): void 
   if (budgetSpent) {
     task.status = 'completed';
     task.lastError = INTERRUPTED_FIRE_MESSAGE;
+    return;
+  }
+  if (task.expiresAt !== null && task.expiresAt <= now) {
+    task.status = 'expired';
+    return;
+  }
+  if (task.effect.kind === 'agent_run_unavailable') {
+    task.status = 'paused';
     return;
   }
   const nextFireAt = computeNextFireAt(task.schedule, now);
