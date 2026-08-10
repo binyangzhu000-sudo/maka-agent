@@ -13,7 +13,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { decodeArtifactRecordJsons } from './artifact-metadata-codec.js';
 import { withArtifactWriterLock } from './artifact-writer-lock.js';
@@ -30,6 +30,7 @@ import { syncDirectory, syncDirectoryChain, syncFile } from './stable-storage.js
 export const OPERATIONAL_BACKUP_FORMAT = 'maka-operational-backup';
 export const OPERATIONAL_BACKUP_SCHEMA_VERSION = 3 as const;
 export const OPERATIONAL_BACKUP_MANIFEST_FILE = 'operational-backup.json';
+const OPERATIONAL_BACKUP_MANIFEST_MAX_BYTES = 1024 * 1024;
 
 export type OperationalBackupErrorCode =
   | 'invalid_root'
@@ -141,7 +142,12 @@ export async function validateOperationalStateBackup(
   const root = resolve(backupRoot);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readFile(resolve(root, OPERATIONAL_BACKUP_MANIFEST_FILE), 'utf8'));
+    const manifestPath = resolve(root, OPERATIONAL_BACKUP_MANIFEST_FILE);
+    const manifestStat = await lstat(manifestPath);
+    if (!manifestStat.isFile() || manifestStat.size > OPERATIONAL_BACKUP_MANIFEST_MAX_BYTES) {
+      throw new Error('Backup manifest must be a bounded regular file');
+    }
+    parsed = JSON.parse(await readFile(manifestPath, 'utf8'));
   } catch (error) {
     throw new OperationalBackupError('corrupt_backup', 'Backup manifest is missing or invalid', {
       cause: error,
@@ -469,8 +475,7 @@ function normalizeStandaloneSqliteSnapshot(path: string): void {
 
 function resolveInside(root: string, path: string): string {
   const candidate = resolve(root, path);
-  const rel = relative(root, candidate);
-  if (rel === '' || rel.startsWith('..') || rel.includes(':')) {
+  if (candidate === root || !isSameOrDescendant(root, candidate)) {
     throw new OperationalBackupError('corrupt_backup', `Unsafe backup path: ${path}`);
   }
   return candidate;
@@ -481,15 +486,17 @@ async function assertSeparateRoots(left: string, right: string): Promise<void> {
     canonicalizeProspectiveRoot(left),
     canonicalizeProspectiveRoot(right),
   ]);
-  const leftToRight = relative(canonicalLeft, canonicalRight);
-  const rightToLeft = relative(canonicalRight, canonicalLeft);
   if (
-    canonicalLeft === canonicalRight ||
-    (!leftToRight.startsWith('..') && !leftToRight.includes(':')) ||
-    (!rightToLeft.startsWith('..') && !rightToLeft.includes(':'))
+    isSameOrDescendant(canonicalLeft, canonicalRight) ||
+    isSameOrDescendant(canonicalRight, canonicalLeft)
   ) {
     throw new OperationalBackupError('overlapping_roots', 'Backup roots must not overlap');
   }
+}
+
+function isSameOrDescendant(parent: string, candidate: string): boolean {
+  const rel = relative(parent, candidate);
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 }
 
 async function canonicalizeProspectiveRoot(path: string): Promise<string> {

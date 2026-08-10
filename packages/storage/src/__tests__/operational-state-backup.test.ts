@@ -121,6 +121,26 @@ test('rejects backup roots that overlap through a path alias', async () => {
   }
 });
 
+test('rejects an overlapping backup root whose name contains a colon', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-colon-'));
+  const stateRoot = join(base, 'state');
+  try {
+    const runtime = createSqliteRuntimeStore(join(stateRoot, 'runtime.sqlite'));
+    runtime.close();
+
+    await assert.rejects(
+      createOperationalStateBackup({
+        stateRoot,
+        destinationRoot: join(stateRoot, 'backup:inside'),
+      }),
+      (error: unknown) =>
+        error instanceof OperationalBackupError && error.code === 'overlapping_roots',
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test('rejects restore roots that overlap through a path alias', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-operational-restore-alias-'));
   const backupRoot = join(base, 'backup');
@@ -231,6 +251,26 @@ test('rejects a backup with an uncheckpointed SQLite sidecar', async () => {
     await assert.rejects(
       validateOperationalStateBackup(backupRoot),
       /Backup cannot contain SQLite sidecars/,
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('rejects a backup whose manifest is a path alias', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-manifest-alias-'));
+  const backupRoot = join(base, 'backup');
+  const manifestPath = join(backupRoot, OPERATIONAL_BACKUP_MANIFEST_FILE);
+  const externalManifest = join(base, OPERATIONAL_BACKUP_MANIFEST_FILE);
+  try {
+    await cp(V016_BACKUP_FIXTURE, backupRoot, { recursive: true });
+    await writeFile(externalManifest, await readFile(manifestPath));
+    await rm(manifestPath);
+    await symlink(externalManifest, manifestPath, 'file');
+
+    await assert.rejects(
+      validateOperationalStateBackup(backupRoot),
+      /Backup manifest is missing or invalid/,
     );
   } finally {
     await rm(base, { recursive: true, force: true });

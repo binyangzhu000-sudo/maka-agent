@@ -1,6 +1,6 @@
 # v0.1.6 operational backup fixture
 
-This directory is an operational backup created by the public storage APIs at Maka tag `v0.1.6`, commit `2e4c1aabf81e2ef986b4a74dc36b96f8e2ba9236`. It is frozen release input for forward-migration tests; tests must not rewrite a current database to imitate this schema.
+This directory is an operational backup created by the public storage APIs at Maka tag `v0.1.6`, commit `2e4c1aabf1f562e0aa0f817201e60ee22e84c3f8`. It is frozen release input for forward-migration tests; tests must not rewrite a current database to imitate this schema.
 
 The source state contains one Session and user message, one Plan Reminder, one durable cron Automation, and one Artifact payload. The backup was produced with Node.js 24.18.1 on macOS by building `@maka/core` and `@maka/storage` at that tag, creating those records through `createSessionStore`, `createSqlitePlanReminderStore`, `createAutomationStore`, and `createSqliteArtifactStore`, then calling `createOperationalStateBackup` with `createdAt = 100`.
 
