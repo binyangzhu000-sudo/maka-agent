@@ -8,6 +8,7 @@ import {
   normalizeAutomationDefinitionRecord,
   normalizeAutomationPendingFireRecord,
 } from './automation-record-codec.js';
+import type { AutomationRecoveryClosure } from './sqlite-legacy-scheduling.js';
 import {
   acquireOperationalStateDatabase,
   type OperationalStateDatabaseLease,
@@ -42,6 +43,7 @@ export interface InteractiveAutomationAuthorityWriter {
   readonly access: 'write';
   readonly [writerBrand]: true;
   read(): Promise<AutomationAuthoritySnapshot>;
+  readRecoveryClosures(): Promise<readonly AutomationRecoveryClosure[]>;
   commit(input: CommitAutomationAuthorityInput): Promise<CommitAutomationAuthorityResult>;
   close(): void;
 }
@@ -49,6 +51,7 @@ export interface InteractiveAutomationAuthorityWriter {
 export interface AutomationAuthorityRepository {
   ready(): Promise<void>;
   read(): AutomationAuthoritySnapshot;
+  readRecoveryClosures(): readonly AutomationRecoveryClosure[];
   commit(input: CommitAutomationAuthorityInput): CommitAutomationAuthorityResult;
   close(): void;
 }
@@ -129,6 +132,7 @@ function createWriterFacade(
     access: 'write',
     [writerBrand]: true,
     read: () => run(() => store.read()),
+    readRecoveryClosures: () => run(() => store.readRecoveryClosures()),
     commit: (input) => {
       const accepted = normalizeCommitInput(input);
       return run(() => store.commit(accepted));
@@ -175,6 +179,33 @@ class SqliteAutomationAuthority implements AutomationAuthorityRepository {
       .map((row) => readPendingFireRow(row));
     assertAutomationSnapshotRelationships(automations, pendingFires);
     return cloneSnapshot({ revision, automations, pendingFires });
+  }
+
+  readRecoveryClosures(): readonly AutomationRecoveryClosure[] {
+    return this.#lease.database
+      .prepare(`
+        SELECT fire_id, automation_id, target_session_id, admitted_at, record_json
+        FROM automation_recovery_closures
+        ORDER BY admitted_at, fire_id
+      `)
+      .all()
+      .map((value) => {
+        const row = value as Record<string, unknown>;
+        if (typeof row.record_json !== 'string') {
+          throw new Error('Invalid Automation recovery closure record JSON');
+        }
+        const parsed = JSON.parse(row.record_json) as { fire?: unknown };
+        const fire = normalizeAutomationPendingFireRecord(parsed.fire);
+        if (
+          row.fire_id !== fire.id ||
+          row.automation_id !== fire.automationId ||
+          row.target_session_id !== fire.targetSessionId ||
+          row.admitted_at !== fire.admittedAt
+        ) {
+          throw new Error(`Automation recovery closure indexes contradict record JSON: ${fire.id}`);
+        }
+        return { fire };
+      });
   }
 
   commit(input: CommitAutomationAuthorityInput): CommitAutomationAuthorityResult {

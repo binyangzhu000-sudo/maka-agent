@@ -24,6 +24,11 @@ export interface LegacyAutomationMigration {
   readonly definitions: readonly AutomationDefinition[];
   readonly pendingFires: readonly AutomationPendingFire[];
   readonly scheduledTasks: readonly ScheduledTask[];
+  readonly recoveryClosures: readonly AutomationRecoveryClosure[];
+}
+
+export interface AutomationRecoveryClosure {
+  readonly fire: AutomationPendingFire;
 }
 
 type LegacyAutomationTarget =
@@ -46,6 +51,21 @@ export function readLegacyAutomationMigration(
     revisionRow?.revision,
     'legacy Automation authority revision',
   );
+  const pendingRows = database
+    .prepare(`
+      SELECT fire_id, automation_id, target_session_id, admitted_at, record_json
+      FROM automation_pending_fires
+      ORDER BY admitted_at, fire_id
+    `)
+    .all();
+  const pendingExecutions = new Map<string, unknown>();
+  for (const value of pendingRows) {
+    const row = requireRecord(value, 'legacy pending Automation fire row');
+    const record = parseRecord(row.record_json, 'legacy pending Automation fire');
+    if (typeof row.automation_id === 'string' && record.execution !== undefined) {
+      pendingExecutions.set(row.automation_id, record.execution);
+    }
+  }
   const targets = database
     .prepare(`
       SELECT automation_id, session_id, created_at, status, durable, record_json
@@ -53,24 +73,18 @@ export function readLegacyAutomationMigration(
       ORDER BY created_at, automation_id
     `)
     .all()
-    .map((row) => decodeLegacyAutomationDefinition(database, row));
+    .map((row) => decodeLegacyAutomationDefinition(database, row, pendingExecutions));
   const byId = new Map(
     targets.map((target) => [
       target.kind === 'automation' ? target.definition.id : target.task.id,
       target,
     ]),
   );
-  const pendingFires = database
-    .prepare(`
-      SELECT fire_id, automation_id, target_session_id, admitted_at, record_json
-      FROM automation_pending_fires
-      ORDER BY admitted_at, fire_id
-    `)
-    .all()
-    .flatMap((row) => {
-      const fire = decodeLegacyAutomationPendingFire(row, byId);
-      return fire ? [fire] : [];
-    });
+  const recoveryClosures: AutomationRecoveryClosure[] = [];
+  const pendingFires = pendingRows.flatMap((row) => {
+    const fire = decodeLegacyAutomationPendingFire(row, byId, recoveryClosures);
+    return fire ? [fire] : [];
+  });
   for (const target of targets) {
     if (target.kind === 'scheduled_task') reconcileInterruptedLegacyTask(target.task, now);
   }
@@ -83,6 +97,7 @@ export function readLegacyAutomationMigration(
     scheduledTasks: targets.flatMap((target) =>
       target.kind === 'scheduled_task' ? [target.task] : [],
     ),
+    recoveryClosures,
   };
 }
 
@@ -122,6 +137,21 @@ export function insertMigratedAutomationState(
   database
     .prepare('UPDATE automation_authority_state SET revision = ? WHERE singleton = 1')
     .run(migration.revision);
+  const insertClosure = database.prepare(`
+    INSERT INTO automation_recovery_closures(
+      fire_id, automation_id, target_session_id, admitted_at, record_json
+    ) VALUES (?, ?, ?, ?, ?)
+  `);
+  for (const closure of migration.recoveryClosures) {
+    const { fire } = closure;
+    insertClosure.run(
+      fire.id,
+      fire.automationId,
+      fire.targetSessionId,
+      fire.admittedAt,
+      JSON.stringify(closure),
+    );
+  }
   insertMigratedScheduledTasks(database, migration.scheduledTasks);
 }
 
@@ -159,6 +189,7 @@ export function insertMigratedScheduledTasks(
 function decodeLegacyAutomationDefinition(
   database: DatabaseSync,
   value: unknown,
+  pendingExecutions: ReadonlyMap<string, unknown>,
 ): LegacyAutomationTarget {
   const row = requireRecord(value, 'legacy Automation definition row');
   const record = parseRecord(row.record_json, 'legacy Automation definition');
@@ -185,20 +216,20 @@ function decodeLegacyAutomationDefinition(
   return {
     kind: 'scheduled_task',
     task: convertLegacyCronAutomation(
-      execution ?? readLegacyAutomationExecution(database, definition.sessionId),
+      execution ??
+        pendingExecutions.get(definition.id) ??
+        readLegacyAutomationExecution(database, definition.sessionId),
       definition,
     ),
   };
 }
 
 function readLegacyAutomationExecution(database: DatabaseSync, sessionId: string): unknown {
-  if (!hasTable(database, 'session_metadata')) {
-    throw new Error(`Legacy cron Automation has no creator Session: ${sessionId}`);
-  }
+  if (!hasTable(database, 'session_metadata')) return undefined;
   const row = database
     .prepare('SELECT payload_json FROM session_metadata WHERE session_id = ?')
     .get(sessionId) as { payload_json?: unknown } | undefined;
-  if (!row) throw new Error(`Legacy cron Automation has no creator Session: ${sessionId}`);
+  if (!row) return undefined;
   const header = parseRecord(row.payload_json, 'legacy cron creator Session');
   return {
     cwd: header.cwd,
@@ -227,6 +258,7 @@ function canonicalizeLegacyAutomationSchedule(value: unknown): unknown {
 function decodeLegacyAutomationPendingFire(
   value: unknown,
   definitions: ReadonlyMap<string, LegacyAutomationTarget>,
+  recoveryClosures: AutomationRecoveryClosure[],
 ): AutomationPendingFire | undefined {
   const row = requireRecord(value, 'legacy pending Automation fire row');
   const record = parseRecord(row.record_json, 'legacy pending Automation fire');
@@ -251,6 +283,7 @@ function decodeLegacyAutomationPendingFire(
       throw new Error(`Legacy pending Automation contradicts its definition: ${fire.id}`);
     }
     settleInterruptedLegacyFire(target.task, fire);
+    recoveryClosures.push({ fire });
     return undefined;
   }
   if (automationKind !== 'heartbeat') throw new Error(`Invalid legacy Automation kind: ${fire.id}`);
@@ -279,12 +312,19 @@ function convertLegacyCronAutomation(
     title: definition.name,
     intent: { kind: 'text', body: definition.prompt },
     schedule: convertLegacyCronSchedule(definition),
-    effect: {
-      kind: 'agent_run',
-      execution: decodeLegacyAutomationExecution(execution),
-    },
-    status: definition.status,
-    nextFireAt: definition.nextFireAt,
+    effect:
+      execution === undefined
+        ? {
+            kind: 'agent_run_unavailable',
+            reason: UNAVAILABLE_EXECUTION_MESSAGE,
+          }
+        : {
+            kind: 'agent_run',
+            execution: decodeLegacyAutomationExecution(execution),
+          },
+    status:
+      execution === undefined && definition.status === 'active' ? 'paused' : definition.status,
+    nextFireAt: execution === undefined ? null : definition.nextFireAt,
     lastFireAt: definition.lastFireAt,
     fireCount: definition.fireCount,
     maxFires: definition.maxFires,
@@ -293,9 +333,13 @@ function convertLegacyCronAutomation(
     createdAt: definition.createdAt,
     updatedAt: definition.updatedAt,
     runs: lastRun,
-    lastError: definition.lastError,
+    lastError:
+      definition.lastError ?? (execution === undefined ? UNAVAILABLE_EXECUTION_MESSAGE : null),
   };
 }
+
+const UNAVAILABLE_EXECUTION_MESSAGE =
+  'Creator Session unavailable; execution settings are unknown.';
 
 const INTERRUPTED_FIRE_MESSAGE =
   'Interrupted during upgrade before the fire outcome was recorded; not re-run.';

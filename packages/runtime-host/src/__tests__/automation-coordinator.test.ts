@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, test } from 'node:test';
 import type { AgentRunHeader, SessionHeader } from '@maka/core';
 import type { AutomationDefinition, AutomationPendingFire } from '@maka/core/automation';
@@ -292,6 +293,44 @@ describe('Host Automation coordinator', () => {
       },
       { rootMode: 'busy' },
     );
+  });
+
+  test('routes a migrated cron recovery closure through Host settlement', async () => {
+    await withHarness(async (harness) => {
+      const fire = pendingFire();
+      const database = new DatabaseSync(join(harness.rootPath, 'runtime.sqlite'));
+      try {
+        database
+          .prepare(`
+            INSERT INTO automation_recovery_closures(
+              fire_id, automation_id, target_session_id, admitted_at, record_json
+            ) VALUES (?, ?, ?, ?, ?)
+          `)
+          .run(
+            fire.id,
+            fire.automationId,
+            fire.targetSessionId,
+            fire.admittedAt,
+            JSON.stringify({ fire }),
+          );
+      } finally {
+        database.close();
+      }
+
+      await harness.coordinator.prepareRecovery();
+      assert.equal(
+        harness.coordinator.assertRecoveryAdmission(rootAdmission(fire)),
+        'host_recovery_closure',
+      );
+      assert.throws(
+        () =>
+          harness.coordinator.assertRecoveryAdmission({
+            ...rootAdmission(fire),
+            runId: 'different-run',
+          }),
+        /no matching pending fire/,
+      );
+    });
   });
 
   test('fails a recovered admitted fire after its durable retry window expires', async () => {
@@ -908,6 +947,7 @@ interface Harness {
   readonly store: InteractiveAutomationAuthorityWriter;
   readonly runs: Map<string, AgentRunHeader>;
   readonly rootInputs: HostedExecutionAdmission[];
+  readonly rootPath: string;
   now: number;
   rootMode: 'run' | 'busy' | 'unavailable';
   residencyCount: number;
@@ -948,6 +988,7 @@ async function withHarness(
     store,
     runs,
     rootInputs,
+    rootPath: capability.canonicalPath,
     now: 1_000,
     rootMode: options.rootMode ?? 'run',
     residencyCount: 0,

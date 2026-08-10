@@ -136,6 +136,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   readonly #manager: AutomationManager;
   readonly #fireCoordinator: HostAutomationFireCoordinator;
   readonly #pendingFires = new Map<string, AutomationPendingFire>();
+  readonly #recoveryClosures = new Map<string, AutomationPendingFire>();
   readonly #retiringSessions = new Set<string>();
 
   #revision = 0;
@@ -201,21 +202,32 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   async prepareRecovery(): Promise<void> {
     await this.#exclusive(async () => {
       if (this.#prepared) return;
-      const snapshot = await this.#store.read();
+      const [snapshot, recoveryClosures] = await Promise.all([
+        this.#store.read(),
+        this.#store.readRecoveryClosures(),
+      ]);
       this.#restore(snapshot);
+      this.#recoveryClosures.clear();
+      for (const { fire } of recoveryClosures) {
+        this.#recoveryClosures.set(fire.automationId, fire);
+      }
       this.#prepared = true;
       this.#fireCoordinator.refreshResidency();
     });
   }
 
-  assertRecoveryAdmission(admission: RootTurnAdmission): void {
+  assertRecoveryAdmission(admission: RootTurnAdmission): 'domain_replay' | 'host_recovery_closure' {
     if (!this.#prepared) {
       throw new AutomationAuthorityInvariantError(
         'Automation recovery admission was inspected before Store recovery',
       );
     }
-    if (admission.execution.kind !== 'automation') return;
-    const fire = this.#pendingFires.get(admission.execution.automationId);
+    if (admission.execution.kind !== 'automation') {
+      throw new AutomationAuthorityInvariantError('Expected an Automation recovery admission');
+    }
+    const pending = this.#pendingFires.get(admission.execution.automationId);
+    const closure = this.#recoveryClosures.get(admission.execution.automationId);
+    const fire = pending ?? closure;
     if (
       !fire ||
       fire.targetSessionId !== admission.sessionId ||
@@ -229,6 +241,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
         `Automation admission ${admission.turnId} has no matching pending fire`,
       );
     }
+    return pending ? 'domain_replay' : 'host_recovery_closure';
   }
 
   async recover(): Promise<void> {

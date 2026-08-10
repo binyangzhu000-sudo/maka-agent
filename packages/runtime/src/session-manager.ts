@@ -4711,10 +4711,7 @@ export class SessionManager {
     admittedAt: number;
     execution: Exclude<
       RootExecutionDescriptor,
-      | { kind: 'regenerate' }
-      | { kind: 'context_compact' }
-      | { kind: 'automation' }
-      | { kind: 'safe_boundary_continuation' }
+      { kind: 'regenerate' } | { kind: 'context_compact' } | { kind: 'safe_boundary_continuation' }
     >;
   }): Promise<void> {
     if (!this.deps.runStore || !this.deps.runtimeEventStore) {
@@ -4725,7 +4722,14 @@ export class SessionManager {
     let recoveryReason: string;
     let diagnostic: Record<string, unknown>;
     let workspaceIdentity: string | undefined;
-    if (input.execution.kind === 'goal') {
+    if (input.execution.kind === 'automation') {
+      headerExtras.automationId = input.execution.automationId;
+      recoveryReason = 'automation_migrated_to_scheduled_task';
+      diagnostic = {
+        executionKind: input.execution.kind,
+        automationId: input.execution.automationId,
+      };
+    } else if (input.execution.kind === 'goal') {
       headerExtras.goalId = input.execution.goalId;
       recoveryReason = 'goal_internal_admission_without_run';
       diagnostic = {

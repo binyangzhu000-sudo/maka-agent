@@ -1366,6 +1366,52 @@ test('startup recovery leaves an admitted Automation fire for its domain prerequ
   }
 });
 
+test('startup recovery canonically closes an Automation fire migrated to ScheduledTask', async () => {
+  const fixture = await createFailureFixture({
+    registerBackend: (backends) => backends.register('fake', (context) => new FakeBackend(context)),
+  });
+  const automationId = 'automation-migrated-scheduled-task';
+  const turnId = 'turn-automation-migrated-scheduled-task';
+  const runId = 'run-automation-migrated-scheduled-task';
+  const userMessageId = 'message-automation-migrated-scheduled-task';
+  const content = { text: '[Automation: migrated]\n\nDo not replay this fire.' };
+  let recovery: RootTurnCoordinator | undefined;
+  try {
+    await fixture.coordinator.close();
+    await fixture.stores.agentRunStore.admitRootTurn({
+      sessionId: fixture.sessionId,
+      turnId,
+      proposedRunId: runId,
+      proposedUserMessageId: userMessageId,
+      execution: { kind: 'automation', automationId },
+      normalizedInput: content,
+      sourceMessages: [],
+      admittedAt: Date.now(),
+      previousRootTurnId: null,
+    });
+
+    recovery = fixture.createRecoveryCoordinator(() => 'host_recovery_closure' as const);
+    await recovery.prepareRecovery();
+    await recovery.recover();
+
+    const run = await fixture.stores.agentRunStore.readRun(fixture.sessionId, runId);
+    assert.equal(run.status, 'failed');
+    assert.equal(run.failureClass, 'app_restarted');
+    const terminalEvents = (
+      await fixture.stores.runtimeEventStore.readRuntimeEvents(fixture.sessionId, runId)
+    ).filter((event) => event.status === 'failed');
+    assert.equal(terminalEvents.length, 1);
+    assert.equal(
+      terminalEvents[0]?.actions?.stateDelta?.recoveryReason,
+      'automation_migrated_to_scheduled_task',
+    );
+  } finally {
+    await recovery?.close();
+    await fixture.messages.close();
+    await fixture.dispose();
+  }
+});
+
 test('Agent Graph supervisor stop owns only graph-capable root Turns', async () => {
   let backend: LinkedChildAuthorityBackend | undefined;
   const fixture = await createFailureFixture({

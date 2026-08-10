@@ -421,6 +421,37 @@ describe('SQLite scheduling schema', () => {
     }
   });
 
+  test('safely pauses a released cron whose execution authority is unavailable', () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      createLegacyAutomationSchema(database);
+      insertLegacyCron(database);
+      const row = database
+        .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const { execution: _execution, ...withoutExecution } = JSON.parse(row.record_json);
+      database
+        .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
+        .run(JSON.stringify(withoutExecution), 'legacy-cron');
+
+      migrateSqliteWorkflowDatabase(database);
+      migrateSqliteAutomationDatabase(database);
+
+      const migrated = database
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('legacy-cron') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.status, 'paused');
+      assert.equal(task.nextFireAt, null);
+      assert.deepEqual(task.effect, {
+        kind: 'agent_run_unavailable',
+        reason: 'Creator Session unavailable; execution settings are unknown.',
+      });
+    } finally {
+      database.close();
+    }
+  });
+
   test('preserves a released cron AgentRun identity', () => {
     const database = new DatabaseSync(':memory:');
     try {
@@ -538,11 +569,13 @@ describe('SQLite scheduling schema', () => {
       const definition = database
         .prepare('SELECT record_json FROM automation_definitions WHERE automation_id = ?')
         .get('legacy-cron') as { record_json: string };
+      const parsedDefinition = JSON.parse(definition.record_json);
+      const { execution, ...definitionWithoutExecution } = parsedDefinition;
       database
         .prepare('UPDATE automation_definitions SET record_json = ? WHERE automation_id = ?')
         .run(
           JSON.stringify({
-            ...JSON.parse(definition.record_json),
+            ...definitionWithoutExecution,
             nextFireAt: 120_000,
             lastFireAt: 61_000,
             fireCount: 1,
@@ -568,6 +601,7 @@ describe('SQLite scheduling schema', () => {
           status: 'admitted',
           admittedAt: 61_000,
           updatedAt: 61_000,
+          execution,
         }),
       );
       migrateSqliteWorkflowDatabase(database);
@@ -583,10 +617,28 @@ describe('SQLite scheduling schema', () => {
           ?.count,
         0,
       );
+      const closure = database
+        .prepare('SELECT record_json FROM automation_recovery_closures WHERE fire_id = ?')
+        .get('fire-1') as { record_json: string };
+      assert.deepEqual(JSON.parse(closure.record_json).fire, {
+        id: 'fire-1',
+        automationId: 'legacy-cron',
+        automationName: 'Daily report',
+        prompt: 'Prepare the report',
+        scheduledFor: 61_000,
+        targetSessionId: 'session-1',
+        turnId: 'turn-1',
+        runId: 'run-1',
+        userMessageId: 'message-1',
+        status: 'admitted',
+        admittedAt: 61_000,
+        updatedAt: 61_000,
+      });
       const migrated = database
         .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
         .get('legacy-cron') as { record_json: string };
       const task = JSON.parse(migrated.record_json);
+      assert.equal(task.effect.kind, 'agent_run');
       assert.equal(task.fireCount, 1);
       assert.equal(task.nextFireAt, 120_000);
       assert.deepEqual(task.runs[0], {

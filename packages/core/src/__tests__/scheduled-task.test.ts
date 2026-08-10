@@ -153,6 +153,31 @@ describe('scheduled-task catalog', () => {
     if (!('error' in resumed)) assert.equal(resumed.nextFireAt, 120_000);
   });
 
+  it('does not resume a migrated task without execution authority', () => {
+    const task: ScheduledTask = {
+      id: 'unavailable',
+      title: 'Unavailable',
+      intent: { kind: 'text', body: 'run' },
+      schedule: { kind: 'interval', everySeconds: 60, startAt: 0 },
+      effect: { kind: 'agent_run_unavailable', reason: 'Execution settings are unknown.' },
+      status: 'paused',
+      nextFireAt: null,
+      lastFireAt: null,
+      fireCount: 0,
+      maxFires: null,
+      expiresAt: null,
+      createdBy: { kind: 'agent', sessionId: 'retired-session' },
+      createdAt: 0,
+      updatedAt: 0,
+      runs: [],
+      lastError: 'Execution settings are unknown.',
+    };
+
+    assert.deepEqual(resumeScheduledTask(task, 60_000), {
+      error: 'Execution settings are unknown.',
+    });
+  });
+
   it('rejects numeric-string coercion and non-canonical cron spacing', () => {
     const now = Date.UTC(2026, 0, 5, 8, 0, 0);
     for (const schedule of [

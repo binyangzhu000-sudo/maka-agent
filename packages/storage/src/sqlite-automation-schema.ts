@@ -4,11 +4,12 @@ import {
   readLegacyAutomationMigration,
 } from './sqlite-legacy-scheduling.js';
 
-export const SQLITE_AUTOMATION_SCHEMA_VERSION = 2;
+export const SQLITE_AUTOMATION_SCHEMA_VERSION = 3;
 export const SQLITE_AUTOMATION_REQUIRED_TABLES = [
   ['automation_authority_state', 1],
   ['automation_definitions', 1],
   ['automation_pending_fires', 1],
+  ['automation_recovery_closures', 3],
 ] as const;
 
 export function migrateSqliteAutomationDatabase(
@@ -65,6 +66,17 @@ export function migrateSqliteAutomationDatabase(
 
     CREATE INDEX IF NOT EXISTS automation_pending_fires_order
       ON automation_pending_fires(admitted_at, fire_id);
+
+    CREATE TABLE IF NOT EXISTS automation_recovery_closures (
+      fire_id TEXT PRIMARY KEY,
+      automation_id TEXT NOT NULL,
+      target_session_id TEXT NOT NULL,
+      admitted_at INTEGER NOT NULL CHECK (admitted_at >= 0),
+      record_json TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS automation_recovery_closures_order
+      ON automation_recovery_closures(admitted_at, fire_id);
   `);
   insertMigratedAutomationState(db, legacy);
 }

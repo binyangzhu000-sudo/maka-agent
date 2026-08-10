@@ -189,8 +189,8 @@ test('migrates released scheduling state through the operational transaction', a
   }
 });
 
-test('rolls back every scheduling scope when a legacy cron cannot be reconstructed', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'maka-operational-scheduling-rollback-'));
+test('retains a legacy cron when its execution authority is unavailable', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-scheduling-unavailable-'));
   const databasePath = join(root, 'runtime.sqlite');
   try {
     acquireOperationalStateDatabase(root).close();
@@ -211,26 +211,18 @@ test('rolls back every scheduling scope when a legacy cron cannot be reconstruct
       );
     legacy.close();
 
-    assert.throws(() => acquireOperationalStateDatabase(root), /has no creator Session/);
+    acquireOperationalStateDatabase(root).close();
 
     const preserved = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      assert.equal(
-        preserved.prepare('SELECT COUNT(*) AS count FROM workflow_plan_reminders').get()?.count,
-        1,
-      );
-      assert.equal(
-        preserved.prepare('SELECT COUNT(*) AS count FROM automation_definitions').get()?.count,
-        1,
-      );
-      assert.equal(
-        preserved
-          .prepare(
-            "SELECT COUNT(*) AS count FROM pragma_table_info('automation_definitions') WHERE name = 'durable'",
-          )
-          .get()?.count,
-        1,
-      );
+      const migrated = preserved
+        .prepare('SELECT record_json FROM workflow_scheduled_tasks WHERE task_id = ?')
+        .get('cron-1') as { record_json: string };
+      const task = JSON.parse(migrated.record_json);
+      assert.equal(task.status, 'paused');
+      assert.equal(task.nextFireAt, null);
+      assert.equal(task.effect.kind, 'agent_run_unavailable');
+      assert.equal(inspectOperationalStateSchema(preserved).status, 'current');
     } finally {
       preserved.close();
     }

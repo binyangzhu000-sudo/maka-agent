@@ -243,7 +243,9 @@ export function runStatusLabel(status: ScheduledTask['runs'][number]['outcome'],
 
 export function formatScheduledTaskDeliveryTargetLabel(effect: ScheduledTaskEffect, locale: UiLocale): string {
   const copy = getScheduledTaskCopy(locale).delivery;
-  if (effect.kind === 'agent_run') return getScheduledTaskCopy(locale).detail.agentDelivery;
+  if (effect.kind === 'agent_run' || effect.kind === 'agent_run_unavailable') {
+    return getScheduledTaskCopy(locale).detail.agentDelivery;
+  }
   if (effect.channel === 'local') return copy.local;
   return copy.bot(botDisplayLabel(effect.platform), effect.chatId);
 }

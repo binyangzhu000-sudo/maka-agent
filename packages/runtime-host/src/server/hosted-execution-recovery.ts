@@ -22,7 +22,9 @@ export interface PrepareHostedExecutionRecoveryInput {
   readonly rootAdmissions: RootAdmissionOwner;
   readonly projection: HostedExecutionProjectionReader;
   readonly runtime: Pick<SessionManager, 'closePendingHostedAdmission'>;
-  readonly assertAutomationAdmission?: (admission: RootTurnAdmission) => void;
+  readonly assertAutomationAdmission?: (
+    admission: RootTurnAdmission,
+  ) => 'domain_replay' | 'host_recovery_closure' | void;
 }
 
 /** Validates and repairs durable admission/message relationships before execution replay. */
@@ -53,14 +55,18 @@ export async function prepareHostedExecutionRecovery(
       const messageIdOwners = admission.userMessageId
         ? (messageIndex.messagesById.get(admission.userMessageId) ?? [])
         : [];
-      const executionContract = recoveryExecutionContract(admission.execution);
+      let executionContract = recoveryExecutionContract(admission.execution);
       if (admission.execution.kind === 'automation' && (!run || !isTerminalRun(run.status))) {
         if (!input.assertAutomationAdmission) {
           throw new RuntimeMessageAuthorityInvariantError(
             'Automation recovery admission has no canonical authority validator',
           );
         }
-        input.assertAutomationAdmission(admission);
+        const disposition = input.assertAutomationAdmission(admission);
+        executionContract = {
+          ...executionContract,
+          pendingWithoutRun: disposition ?? 'domain_replay',
+        };
       }
       if (!executionContract.allowsQueueSources && admission.sourceMessages.length !== 0) {
         throw new Error(
@@ -328,11 +334,13 @@ function usesHostRecoveryClosure(execution: RootExecutionDescriptor): execution 
       | 'linked_child_initial'
       | 'linked_child_resume'
       | 'claimed_agent_graph_intent'
-      | 'linked_child_provider_retry';
+      | 'linked_child_provider_retry'
+      | 'automation';
   }
 > {
   return (
     execution.kind === 'goal' ||
+    execution.kind === 'automation' ||
     execution.kind === 'agent_graph_supervisor_wake' ||
     execution.kind === 'linked_child_initial' ||
     execution.kind === 'linked_child_resume' ||

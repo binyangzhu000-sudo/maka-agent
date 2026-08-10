@@ -287,7 +287,9 @@ export class RootTurnCoordinator implements HostedExecutionAuthority {
     private readonly requestHostDrain: () => void,
     private readonly clientCapabilities: HostClientCapabilityCoordinator | undefined,
     private readonly resolveExecutionObserver: () => HostedExecutionObserver,
-    private readonly assertAutomationRecoveryAdmission?: (admission: RootTurnAdmission) => void,
+    private readonly assertAutomationRecoveryAdmission?: (
+      admission: RootTurnAdmission,
+    ) => 'domain_replay' | 'host_recovery_closure' | void,
     attachmentValidator?: HostTurnAttachmentValidator,
     prepareSkillInvocation?: HostSkillInvocationPreparer,
   ) {

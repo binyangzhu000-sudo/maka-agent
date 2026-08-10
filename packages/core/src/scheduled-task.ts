@@ -44,7 +44,8 @@ export type ScheduledTaskSchedule =
 export type ScheduledTaskEffect =
   | { kind: 'notify'; channel: 'local' }
   | { kind: 'notify'; channel: 'bot'; platform: BotProvider; chatId: string }
-  | { kind: 'agent_run'; execution: ScheduledTaskExecutionTemplate };
+  | { kind: 'agent_run'; execution: ScheduledTaskExecutionTemplate }
+  | { kind: 'agent_run_unavailable'; reason: string };
 
 /** Frozen at create time so later settings changes do not rewrite past jobs. */
 export interface ScheduledTaskExecutionTemplate {
@@ -305,6 +306,7 @@ export function resumeScheduledTask(
   now: number,
 ): ScheduledTask | { error: string } {
   if (task.status !== 'paused') return { error: 'Only paused tasks can be resumed' };
+  if (task.effect.kind === 'agent_run_unavailable') return { error: task.effect.reason };
   if (task.maxFires !== null && task.fireCount >= task.maxFires) {
     return { error: 'Scheduled task fire budget is exhausted' };
   }
