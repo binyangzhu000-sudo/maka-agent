@@ -125,6 +125,9 @@ function liveHostUnavailableMessage(
   if (result.kind === 'draining') {
     return 'Interactive storage is locked by a draining Runtime Host';
   }
+  if (result.kind === 'upgrade_required') {
+    return 'Interactive storage is locked by an older Runtime Host build';
+  }
   return `Interactive storage is locked but its Runtime Host is unavailable (${result.reason})`;
 }
 

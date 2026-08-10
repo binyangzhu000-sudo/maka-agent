@@ -44,9 +44,12 @@ import { WEB_SEARCH_OPERATION_SPECS } from './web-search.js';
 export type {
   HostDiagnosticsInput,
   HostDiagnosticsResult,
+  HostActivitySnapshot,
   HostLifecycleState,
   HostStatusInput,
   HostStatusResult,
+  HostUpgradePrepareInput,
+  HostUpgradePrepareResult,
 } from './host-status.js';
 export type {
   HostOperationError,

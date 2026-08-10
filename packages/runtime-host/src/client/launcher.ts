@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 export interface DetachedCandidateInput {
   rootPath: string;
   expectedRootId: string;
+  generation?: string;
   legacyConfigurationRoot?: string;
   idleGraceMs?: number;
   handshakeTimeoutMs?: number;
@@ -36,6 +37,7 @@ export function launchDetachedRuntimeHostCandidate(
   ];
   appendArgument(args, '--idle-grace-ms', input.idleGraceMs);
   appendArgument(args, '--handshake-timeout-ms', input.handshakeTimeoutMs);
+  appendArgument(args, '--generation', input.generation);
   appendArgument(args, '--legacy-configuration-root', input.legacyConfigurationRoot);
 
   // spawn() commits the side effect synchronously; spawned only reports that commit's outcome.

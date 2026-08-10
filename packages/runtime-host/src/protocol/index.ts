@@ -1,6 +1,10 @@
 import { requireCount, requireId, requireRecord, requireString } from './codec.js';
 import { invalidProtocolFrame, RuntimeHostProtocolError } from './errors.js';
-import { requireHostLifecycleState } from './host-status.js';
+import {
+  decodeHostActivitySnapshot,
+  requireHostLifecycleState,
+  type HostActivitySnapshot,
+} from './host-status.js';
 import {
   decodeSubscriptionFrame,
   isSubscriptionFrameKind,
@@ -99,6 +103,8 @@ export interface ClientHello {
   protocolMax: number;
   compatibilityEpoch: number;
   compositionId: string;
+  generation?: string;
+  takeover?: { expectedHostEpoch: string };
 }
 
 export interface HostAccepted {
@@ -121,8 +127,10 @@ export interface HostIncompatible {
   compatibilityEpoch: number;
   compositionId: string;
   compositionRevision: string;
+  generation?: string;
   state: HostLifecycleState;
   replacement: 'blocked_by_residency' | 'wait_for_idle_exit';
+  activity?: HostActivitySnapshot;
 }
 
 export interface HostDraining {
@@ -155,6 +163,8 @@ export interface HostRegistration {
   compatibilityEpoch: number;
   compositionId: string;
   compositionRevision: string;
+  lifecycleMode?: 'ephemeral' | 'service';
+  generation?: string;
   state: HostLifecycleState;
   pid: number;
   createdAt: string;
@@ -182,12 +192,22 @@ export function requireClientInstanceId(value: unknown): string {
   return requireId(value, 'clientInstanceId');
 }
 
+export function requireHostGeneration(value: unknown): string {
+  return requireId(value, 'generation');
+}
+
 export function decodeClientFrame(value: unknown): ClientFrame {
   const frame = requireRecord(value, 'client frame');
   if (frame.kind === 'hello') {
     const protocolMin = requireProtocolVersion(frame.protocolMin, 'protocolMin');
     const protocolMax = requireProtocolVersion(frame.protocolMax, 'protocolMax');
     validateProtocolRange({ min: protocolMin, max: protocolMax });
+    const generation =
+      frame.generation === undefined ? undefined : requireHostGeneration(frame.generation);
+    const takeover = decodeTakeover(frame.takeover);
+    if (takeover !== undefined && generation === undefined) {
+      throw invalidProtocolFrame('Runtime Host takeover requires a generation');
+    }
     return {
       kind: 'hello',
       clientInstanceId: requireClientInstanceId(frame.clientInstanceId),
@@ -196,6 +216,8 @@ export function decodeClientFrame(value: unknown): ClientFrame {
       protocolMax,
       compatibilityEpoch: decodeCompatibilityEpoch(frame.compatibilityEpoch),
       compositionId: decodeCompositionId(frame.compositionId),
+      ...(generation === undefined ? {} : { generation }),
+      ...(takeover === undefined ? {} : { takeover }),
     } satisfies ClientHello;
   }
   if (isClientCapabilityClientFrameKind(frame.kind)) {
@@ -231,8 +253,14 @@ export function decodeHostFrame(value: unknown): HostFrame {
       compatibilityEpoch: decodeCompatibilityEpoch(frame.compatibilityEpoch),
       compositionId: decodeCompositionId(frame.compositionId),
       compositionRevision: decodeCompositionRevision(frame.compositionRevision),
+      ...(frame.generation === undefined
+        ? {}
+        : { generation: requireHostGeneration(frame.generation) }),
       state: requireHostLifecycleState(frame.state),
       replacement: requireReplacement(frame.replacement),
+      ...(frame.activity === undefined
+        ? {}
+        : { activity: decodeHostActivitySnapshot(frame.activity) }),
     } satisfies HostIncompatible;
   }
   if (frame.kind === 'draining') {
@@ -281,10 +309,27 @@ export function decodeHostRegistration(value: unknown): HostRegistration {
         : requireCompatibilityEpoch(registration.compatibilityEpoch),
     compositionId: decodeCompositionId(registration.compositionId),
     compositionRevision: decodeCompositionRevision(registration.compositionRevision),
+    ...(registration.lifecycleMode === undefined
+      ? {}
+      : { lifecycleMode: requireHostLifecycleMode(registration.lifecycleMode) }),
+    ...(registration.generation === undefined
+      ? {}
+      : { generation: requireHostGeneration(registration.generation) }),
     state: requireHostLifecycleState(registration.state),
     pid,
     createdAt: requireString(registration.createdAt, 'createdAt', 64),
   };
+}
+
+function requireHostLifecycleMode(value: unknown): 'ephemeral' | 'service' {
+  if (value === 'ephemeral' || value === 'service') return value;
+  throw invalidProtocolFrame('Invalid Runtime Host lifecycle mode');
+}
+
+function decodeTakeover(value: unknown): ClientHello['takeover'] {
+  if (value === undefined) return undefined;
+  const takeover = requireRecord(value, 'Runtime Host takeover');
+  return { expectedHostEpoch: requireId(takeover.expectedHostEpoch, 'expectedHostEpoch') };
 }
 
 export function encodeProtocolMessage(value: ClientFrame | HostFrame): EncodedProtocolMessage {
