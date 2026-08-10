@@ -17,18 +17,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { decodeArtifactRecordJsons } from './artifact-metadata-codec.js';
 import { withArtifactWriterLock } from './artifact-writer-lock.js';
 import { decodeStoredMessageForRecovery } from './execution-record-codec.js';
+import { resolveStorageRoot, type StorageRootKind } from './root-authority.js';
 import {
   acquireOperationalStateDatabase,
+  adoptRestoredOperationalStateRootInternal,
+  inspectOperationalStateSchema,
   OPERATIONAL_STATE_DATABASE_NAME,
-  OPERATIONAL_STATE_SCHEMA_VERSION,
 } from './operational-state-store.js';
-import { SQLITE_ARTIFACT_SCHEMA_VERSION } from './sqlite-artifact-schema.js';
-import { SQLITE_AUTOMATION_SCHEMA_VERSION } from './sqlite-automation-schema.js';
-import { SQLITE_CORE_EXECUTION_SCHEMA_VERSION } from './sqlite-core-execution-schema.js';
-import { SQLITE_RUNTIME_SCHEMA_VERSION } from './sqlite-runtime-schema.js';
-import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from './sqlite-session-metadata-schema.js';
-import { SQLITE_USAGE_SCHEMA_VERSION } from './sqlite-usage-schema.js';
-import { SQLITE_WORKFLOW_SCHEMA_VERSION } from './sqlite-workflow-schema.js';
 import { syncDirectory, syncDirectoryChain, syncFile } from './stable-storage.js';
 
 export const OPERATIONAL_BACKUP_FORMAT = 'maka-operational-backup';
@@ -75,6 +70,7 @@ export interface CreateOperationalBackupInput {
 export interface RestoreOperationalBackupInput {
   readonly backupRoot: string;
   readonly destinationRoot: string;
+  readonly kind: StorageRootKind;
 }
 
 export async function createOperationalStateBackup(
@@ -183,9 +179,26 @@ export async function restoreOperationalStateBackup(
     if (JSON.stringify(actual) !== JSON.stringify(manifest.files)) {
       throw new OperationalBackupError('corrupt_backup', 'Restored file inventory does not match');
     }
-    validateSqlite(resolve(stagingRoot, OPERATIONAL_STATE_DATABASE_NAME), manifest.files);
+    const databasePath = resolve(stagingRoot, OPERATIONAL_STATE_DATABASE_NAME);
+    const destinationCapability = await resolveStorageRoot({
+      path: stagingRoot,
+      kind: input.kind,
+    });
+    const databaseLease = acquireOperationalStateDatabase(stagingRoot);
+    try {
+      await adoptRestoredOperationalStateRootInternal(
+        databaseLease,
+        destinationCapability,
+        destinationRoot,
+      );
+    } finally {
+      databaseLease.close();
+    }
+    normalizeStandaloneSqliteSnapshot(databasePath);
+    await chmod(databasePath, 0o600);
+    await syncFile(databasePath);
+    validateSqlite(databasePath, await inventory(stagingRoot), 'current');
     await syncDirectoryChain(stagingRoot, stagingRoot);
-    await mkdir(dirname(destinationRoot), { recursive: true });
     await rename(stagingRoot, destinationRoot);
     await syncDirectory(dirname(destinationRoot));
     return manifest;
@@ -322,7 +335,11 @@ async function copyRegularTree(
   await syncDirectoryChain(dirname(destination), destinationRoot);
 }
 
-function validateSqlite(path: string, files: readonly OperationalBackupFile[]): void {
+function validateSqlite(
+  path: string,
+  files: readonly OperationalBackupFile[],
+  requiredSchema: 'migratable' | 'current' = 'migratable',
+): void {
   try {
     const metadata = lstatSync(path);
     if (!metadata.isFile() || metadata.isSymbolicLink()) {
@@ -340,104 +357,9 @@ function validateSqlite(path: string, files: readonly OperationalBackupFile[]): 
       if (database.prepare('PRAGMA foreign_key_check').all().length > 0) {
         throw new Error('foreign_key_check failed');
       }
-      const expected = new Map<string, number>([
-        ['runtime', SQLITE_RUNTIME_SCHEMA_VERSION],
-        ['session_metadata', SQLITE_SESSION_METADATA_SCHEMA_VERSION],
-        ['core_execution', SQLITE_CORE_EXECUTION_SCHEMA_VERSION],
-        ['workflow', SQLITE_WORKFLOW_SCHEMA_VERSION],
-        ['usage', SQLITE_USAGE_SCHEMA_VERSION],
-        ['artifact', SQLITE_ARTIFACT_SCHEMA_VERSION],
-        ['automation', SQLITE_AUTOMATION_SCHEMA_VERSION],
-        ['operational', OPERATIONAL_STATE_SCHEMA_VERSION],
-      ]);
-      const rows = database
-        .prepare('SELECT scope, version FROM operational_schema_migrations')
-        .all() as Array<{ scope?: unknown; version?: unknown }>;
-      if (
-        rows.length !== expected.size ||
-        rows.some(
-          (entry) => typeof entry.scope !== 'string' || expected.get(entry.scope) !== entry.version,
-        )
-      ) {
+      const schema = inspectOperationalStateSchema(database);
+      if (requiredSchema === 'current' && schema.status !== 'current') {
         throw new Error('operational schema versions do not match');
-      }
-
-      const requiredTables = [
-        'operational_schema_migrations',
-        'runtime_events',
-        'tool_journal_events',
-        'tool_operations',
-        'runtime_partial_snapshots',
-        'runtime_partial_segments',
-        'runtime_capabilities',
-        'runtime_continuation_claims',
-        'runtime_workspace_epochs',
-        'runtime_workspace_versions',
-        'runtime_workspace_heads',
-        'headless_task_run_events',
-        'session_metadata_schema',
-        'session_metadata',
-        'session_metadata_labels',
-        'session_metadata_tombstones',
-        'subagent_spawns',
-        'agent_graph_intent_claims',
-        'agent_graph_schedule_updates',
-        'agent_graph_operator_provisions',
-        'agent_graph_client_projections',
-        'agent_graph_client_operator_projections',
-        'agent_graph_client_terminal_activity',
-        'agent_graph_client_applied_records',
-        'agent_graph_supervisor_wakes',
-        'agent_graph_supervisor_wake_attempts',
-        'sandbox_boundary_log',
-        'session_create_claims',
-        'session_catalog_state',
-        'session_catalog_projection',
-        'session_catalog_label_projection',
-        'session_messages',
-        'projects',
-        'project_locations',
-        'project_aliases',
-        'core_agent_runs',
-        'core_agent_run_events',
-        'core_agent_run_projections',
-        'core_root_turn_admissions',
-        'core_root_turn_start_rejections',
-        'core_root_source_message_proofs',
-        'core_interaction_requests',
-        'core_interaction_outcomes',
-        'core_message_host_epochs',
-        'core_message_receipts',
-        'core_shell_runs',
-        'workflow_task_ledger_events',
-        'workflow_task_ledger_projections',
-        'workflow_plan_events',
-        'workflow_plan_projections',
-        'workflow_deep_research_events',
-        'workflow_scheduled_tasks',
-        'workflow_scheduled_task_fires',
-        'workflow_quote_companion_cleanup',
-        'workflow_daily_review_state',
-        'workflow_daily_review_authority_state',
-        'workflow_daily_review_archives',
-        'usage_llm_calls',
-        'usage_tool_invocations',
-        'usage_model_call_attempts',
-        'usage_model_call_reprojection',
-        'usage_pricing_authority',
-        'usage_pricing_overrides',
-        'artifact_records',
-        'automation_authority_state',
-        'automation_definitions',
-        'automation_pending_fires',
-      ];
-      const tableExists = database.prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-      );
-      for (const table of requiredTables) {
-        if (tableExists.get(table) === undefined) {
-          throw new Error(`required table is missing: ${table}`);
-        }
       }
 
       const artifactRows = database

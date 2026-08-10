@@ -68,8 +68,7 @@ const REQUIRED_SCHEMA_TRIGGERS = [
   ...SQLITE_WORKFLOW_REQUIRED_TRIGGERS.map((trigger) => ({ ...trigger, scope: 'workflow' })),
 ] as const;
 
-const REQUIRED_SCHEMA_TABLES = [
-  'operational_schema_migrations',
+const RUNTIME_SCHEMA_TABLES = [
   'runtime_events',
   'runtime_session_event_ordinals',
   'tool_journal_events',
@@ -83,6 +82,13 @@ const REQUIRED_SCHEMA_TABLES = [
   'runtime_workspace_versions',
   'runtime_workspace_heads',
   'headless_task_run_events',
+] as const;
+
+const RUNTIME_SCHEMA_TABLE_NAMES = new Set<string>(RUNTIME_SCHEMA_TABLES);
+
+const REQUIRED_SCHEMA_TABLES = [
+  'operational_schema_migrations',
+  ...RUNTIME_SCHEMA_TABLES,
   'session_metadata_schema',
   'session_metadata',
   'session_metadata_labels',
@@ -339,8 +345,18 @@ export function inspectOperationalStateSchema(
   }
 
   if (!hasTable(database, 'operational_schema_migrations')) {
-    assertRequiredSchemaTriggers(database, versions);
-    return { status: 'needs_migration', versions };
+    if (runtimeVersion === 0 && !hasApplicationSchemaObjects(database)) {
+      return { status: 'needs_migration', versions };
+    }
+    if (runtimeVersion === SQLITE_RUNTIME_SCHEMA_VERSION && hasOnlyRuntimeSchemaTables(database)) {
+      assertRequiredSchemaTables(database, versions, RUNTIME_SCHEMA_TABLES);
+      assertRequiredSchemaTriggers(database, versions);
+      return { status: 'needs_migration', versions };
+    }
+    throw new Error(
+      'Operational schema registry is missing from a nonempty database; ' +
+        'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
+    );
   }
   assertOperationalSchemaRegistryDefinition(database);
   const rows = database
@@ -408,11 +424,12 @@ function assertOperationalSchemaRegistryDefinition(database: DatabaseSync): void
 function assertRequiredSchemaTables(
   database: DatabaseSync,
   versions: ReadonlyMap<string, number>,
+  tables: readonly string[] = REQUIRED_SCHEMA_TABLES,
 ): void {
   const tableExists = database.prepare(
     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
   );
-  for (const table of REQUIRED_SCHEMA_TABLES) {
+  for (const table of tables) {
     const introduction = SCHEMA_TABLE_INTRODUCTIONS.get(table);
     if (introduction && (versions.get(introduction[0]) ?? -1) < introduction[1]) continue;
     if (tableExists.get(table) === undefined) {
@@ -473,6 +490,22 @@ function hasTable(database: DatabaseSync, name: string): boolean {
     `)
     .get(name) as { present?: unknown } | undefined;
   return table?.present === 1;
+}
+
+function hasApplicationSchemaObjects(database: DatabaseSync): boolean {
+  const object = database
+    .prepare("SELECT 1 AS present FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
+    .get() as { present?: unknown } | undefined;
+  return object?.present === 1;
+}
+
+function hasOnlyRuntimeSchemaTables(database: DatabaseSync): boolean {
+  const tables = database
+    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all() as Array<{ name?: unknown }>;
+  return tables.every(
+    ({ name }) => typeof name === 'string' && RUNTIME_SCHEMA_TABLE_NAMES.has(name),
+  );
 }
 
 export function migrateOperationalStateDatabaseInternal(db: DatabaseSync, now: () => number): void {

@@ -410,6 +410,23 @@ const incompatibleSchemaCases: ReadonlyArray<{
     },
   },
   {
+    name: 'rejects a nonempty database without its operational registry',
+    error: /Operational schema registry is missing/,
+    prepare(database) {
+      database.exec(`
+        DROP TABLE operational_schema_migrations;
+        DROP TABLE workflow_task_ledger_events;
+      `);
+    },
+    assertPreserved(database) {
+      const tableExists = database.prepare(
+        "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?",
+      );
+      assert.equal(tableExists.get('operational_schema_migrations'), undefined);
+      assert.equal(tableExists.get('workflow_task_ledger_events'), undefined);
+    },
+  },
+  {
     name: 'rejects a current schema with a missing required table',
     error: /required table is missing: workflow_task_ledger_events/,
     prepare(database) {
