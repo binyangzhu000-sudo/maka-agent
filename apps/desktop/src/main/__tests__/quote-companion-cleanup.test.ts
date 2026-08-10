@@ -178,6 +178,12 @@ describe('quote companion cleanup authority', () => {
           session_id TEXT PRIMARY KEY,
           tracked_at INTEGER NOT NULL
         );
+        CREATE TABLE workflow_plan_reminders (
+          reminder_id TEXT PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
         INSERT INTO workflow_quote_companion_cleanup(session_id, tracked_at)
         VALUES ('fork-before-lease-schema', 1);
         UPDATE operational_schema_migrations SET version = 3 WHERE scope = 'workflow';
