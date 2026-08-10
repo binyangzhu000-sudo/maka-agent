@@ -15,11 +15,11 @@ Locations intentionally omit line numbers so unrelated edits do not invalidate t
 
 | Classification | Count |
 |---|---:|
-| windows-backend-gap | 20 |
-| portable-candidate | 0 |
+| windows-backend-gap | 21 |
+| portable-candidate | 3 |
 | platform-contract | 35 |
 
-Total Windows-excluded declarations: **55**
+Total Windows-excluded declarations: **59**
 
 ## Inventory
 
@@ -42,6 +42,7 @@ Total Windows-excluded declarations: **55**
 | windows-backend-gap | `packages/runtime-host/src/__tests__/host-kernel.test.ts` reports one shutdown failure through close and closed while releasing ownership | `process.platform === 'win32'` |
 | platform-contract | `packages/runtime-host/src/__tests__/host-kernel.test.ts` publishes private POSIX endpoint and registration permissions | `process.platform === 'win32'` |
 | windows-backend-gap | `packages/runtime-host/src/__tests__/memory-two-client-uds.test.ts` two UDS clients share one recoverable Memory authority across Host death | `process.platform === 'win32' ? 'POSIX process death gate' : false` |
+| windows-backend-gap | `packages/runtime-host/src/__tests__/project-catalog-two-client-uds.test.ts` two UDS clients converge on one Host-owned Project Catalog | `process.platform === 'win32'` |
 | windows-backend-gap | `packages/runtime-host/src/__tests__/runtime-policy-coordinator.test.ts` invalidates when a real published mutation loses its commit reply | `process.platform === 'win32'` |
 | windows-backend-gap | `packages/runtime-host/src/__tests__/runtime-resource-process.test.ts` real Host Runtime Resource process lifecycle | `process.platform === 'win32'` |
 | windows-backend-gap | `packages/runtime-host/src/__tests__/runtime-resource-two-client-uds.test.ts` a Host-owned PTY survives Desktop disconnect and transfers control to TUI | `process.platform === 'win32' ? 'POSIX UDS and shell integration' : false` |
@@ -52,6 +53,7 @@ Total Windows-excluded declarations: **55**
 | windows-backend-gap | `packages/runtime-host/src/__tests__/usage-pricing-client-correlation.test.ts` fails the connection for a canonical response with mismatched ${mismatch.name} | `process.platform === 'win32'` |
 | windows-backend-gap | `packages/runtime-host/src/__tests__/usage-pricing-client-correlation.test.ts` rejects local invalid input without poisoning transport and correlates a private canonical copy | `process.platform === 'win32'` |
 | windows-backend-gap | `packages/runtime-host/src/__tests__/usage-pricing-two-client-uds.test.ts` two clients share usage projection and one revision-CAS pricing authority | `process.platform === 'win32'` |
+| portable-candidate | `packages/runtime/src/__tests__/filesystem-apply-patch.test.ts` deletes a self-referential symlink entry without following it | `process.platform === 'win32'` |
 | platform-contract | `packages/runtime/src/__tests__/filesystem-worker-process-runner.test.ts` filesystem worker rejects boundedly when a detached descendant retains stdout | `process.platform === 'win32' ? 'POSIX detached process-group semantics required' : false` |
 | platform-contract | `packages/runtime/src/__tests__/filesystem-worker-smoke.test.ts` macOS filesystem worker smoke | `process.platform !== 'darwin'` |
 | platform-contract | `packages/runtime/src/__tests__/shell-exec.test.ts` bounds output drain after the root exits while a detached descendant retains stdout | `process.platform === 'win32' ? 'POSIX detached process-group semantics required' : false` |
@@ -63,6 +65,8 @@ Total Windows-excluded declarations: **55**
 | platform-contract | `packages/runtime/src/__tests__/shell-run-manager.test.ts` settles after root exit when a detached descendant retains inherited stdout | `process.platform === 'win32' ? 'POSIX detached process-group semantics required' : false` |
 | platform-contract | `packages/runtime/src/__tests__/shell-run-manager.test.ts` keeps the first committed lifecycle cause across Stop and timeout races | `process.platform === 'win32' ? 'Windows tree termination has no graceful SIGTERM phase' : false` |
 | platform-contract | `packages/runtime/src/__tests__/shell-run-manager.test.ts` keeps SIGTERM final output and escalates an ignored SIGTERM without leaking slots | `process.platform === 'win32' ? 'Windows tree termination has no graceful SIGTERM phase' : false` |
+| portable-candidate | `packages/storage/src/__tests__/managed-dependency-environment.test.ts` accepts a POSIX package bin symlink whose target remains inside the dependency root | `process.platform === 'win32'` |
+| portable-candidate | `packages/storage/src/__tests__/managed-dependency-environment.test.ts` isolates published POSIX content from a producer-retained writable handle | `process.platform === 'win32'` |
 | platform-contract | `packages/storage/src/__tests__/managed-workspace-baseline.test.ts` rejects an authority database whose file identity changes after registration | `process.platform === 'win32' ? 'Windows cannot rename an open SQLite database to replace its file identity' : false` |
 | platform-contract | `packages/storage/src/__tests__/managed-workspace-baseline.test.ts` does not return an accepted baseline when runtime.sqlite is replaced after the initial root check | `process.platform === 'win32' ? 'Windows cannot rename an open SQLite database during the verification race' : false` |
 | platform-contract | `packages/storage/src/__tests__/managed-workspace-baseline.test.ts` rejects a source tree containing a non-UTF-8 Git path | `process.platform === 'win32'` |

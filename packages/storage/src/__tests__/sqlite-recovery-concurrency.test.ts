@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -269,13 +269,18 @@ describe('SQLite recovery authority multi-process races', () => {
     });
   });
 
-  it('serializes concurrent operational schema 6 migration', async () => {
+  it('serializes concurrent operational runtime migration', async () => {
     await withPreparedDatabase(async ({ dbPath, startPath }) => {
+      acquireOperationalStateDatabase(dirname(dbPath)).close();
       const db = new DatabaseSync(dbPath);
       try {
-        db.exec(
-          "DROP TRIGGER runtime_events_assign_session_ordinal; DROP TABLE runtime_session_event_ordinals; DROP TABLE runtime_partial_segments; DROP TABLE runtime_storage_root_binding; DROP TABLE runtime_workspace_heads; DROP TABLE runtime_workspace_versions; DROP TABLE runtime_workspace_epochs; DROP TABLE headless_task_run_events; DELETE FROM runtime_capabilities WHERE capability = 'runtime_workspace_version_authority'; PRAGMA user_version = 6;",
-        );
+        db.exec(`
+          DROP TRIGGER runtime_events_assign_session_ordinal;
+          DROP TRIGGER runtime_event_ordinal_retry;
+          DROP TABLE runtime_session_event_ordinals;
+          PRAGMA user_version = 10;
+          UPDATE operational_schema_migrations SET version = 10 WHERE scope = 'runtime';
+        `);
       } finally {
         db.close();
       }

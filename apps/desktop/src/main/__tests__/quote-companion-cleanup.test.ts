@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
+import { acquireOperationalStateDatabase } from '@maka/storage';
 import { createSessionCopyCleanupAuthority } from '../quote-companion-cleanup.js';
 
 const roots: string[] = [];
@@ -167,15 +168,19 @@ describe('quote companion cleanup authority', () => {
 
   it('upgrades pending cleanup rows written by the previous schema', async () => {
     const workspaceRoot = await createWorkspace();
+    acquireOperationalStateDatabase(workspaceRoot).close();
     const database = new DatabaseSync(join(workspaceRoot, 'runtime.sqlite'));
     try {
       database.exec(`
+        DROP TRIGGER workflow_quote_cleanup_fill_record;
+        DROP TABLE workflow_quote_companion_cleanup;
         CREATE TABLE workflow_quote_companion_cleanup (
           session_id TEXT PRIMARY KEY,
           tracked_at INTEGER NOT NULL
         );
         INSERT INTO workflow_quote_companion_cleanup(session_id, tracked_at)
         VALUES ('fork-before-lease-schema', 1);
+        UPDATE operational_schema_migrations SET version = 3 WHERE scope = 'workflow';
       `);
     } finally {
       database.close();
