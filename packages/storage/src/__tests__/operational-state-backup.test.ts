@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -94,6 +94,50 @@ test('backs up and restores runtime.sqlite plus artifact bytes', async () => {
     } finally {
       await restored.close?.();
     }
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('rejects backup roots that overlap through a path alias', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-alias-'));
+  const stateRoot = join(base, 'state');
+  const aliasRoot = join(base, 'state-alias');
+  try {
+    const runtime = createSqliteRuntimeStore(join(stateRoot, 'runtime.sqlite'));
+    runtime.close();
+    await symlink(stateRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await assert.rejects(
+      createOperationalStateBackup({
+        stateRoot,
+        destinationRoot: join(aliasRoot, 'backup'),
+      }),
+      (error: unknown) =>
+        error instanceof OperationalBackupError && error.code === 'overlapping_roots',
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('rejects restore roots that overlap through a path alias', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-operational-restore-alias-'));
+  const backupRoot = join(base, 'backup');
+  const aliasRoot = join(base, 'backup-alias');
+  try {
+    await cp(V016_BACKUP_FIXTURE, backupRoot, { recursive: true });
+    await symlink(backupRoot, aliasRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+    await assert.rejects(
+      restoreOperationalStateBackup({
+        backupRoot,
+        destinationRoot: join(aliasRoot, 'restore'),
+        kind: 'interactive',
+      }),
+      (error: unknown) =>
+        error instanceof OperationalBackupError && error.code === 'overlapping_roots',
+    );
   } finally {
     await rm(base, { recursive: true, force: true });
   }

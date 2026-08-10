@@ -7,12 +7,13 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, relative, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { decodeArtifactRecordJsons } from './artifact-metadata-codec.js';
 import { withArtifactWriterLock } from './artifact-writer-lock.js';
@@ -78,10 +79,10 @@ export async function createOperationalStateBackup(
 ): Promise<OperationalBackupManifest> {
   const stateRoot = resolve(input.stateRoot);
   const destinationRoot = resolve(input.destinationRoot);
-  assertSeparateRoots(stateRoot, destinationRoot);
+  await assertSeparateRoots(stateRoot, destinationRoot);
   await assertMissing(destinationRoot, 'backup destination');
   return withArtifactWriterLock(stateRoot, async (canonicalStateRoot) => {
-    assertSeparateRoots(canonicalStateRoot, destinationRoot);
+    await assertSeparateRoots(canonicalStateRoot, destinationRoot);
     const stagingRoot = `${destinationRoot}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await mkdir(stagingRoot, { recursive: true, mode: 0o700 });
@@ -160,7 +161,7 @@ export async function restoreOperationalStateBackup(
 ): Promise<OperationalBackupManifest> {
   const backupRoot = resolve(input.backupRoot);
   const destinationRoot = resolve(input.destinationRoot);
-  assertSeparateRoots(backupRoot, destinationRoot);
+  await assertSeparateRoots(backupRoot, destinationRoot);
   await assertMissing(destinationRoot, 'restore destination');
   const manifest = await validateOperationalStateBackup(backupRoot);
   const stagingRoot = `${destinationRoot}.${process.pid}.${randomUUID()}.tmp`;
@@ -475,15 +476,43 @@ function resolveInside(root: string, path: string): string {
   return candidate;
 }
 
-function assertSeparateRoots(left: string, right: string): void {
-  const leftToRight = relative(left, right);
-  const rightToLeft = relative(right, left);
+async function assertSeparateRoots(left: string, right: string): Promise<void> {
+  const [canonicalLeft, canonicalRight] = await Promise.all([
+    canonicalizeProspectiveRoot(left),
+    canonicalizeProspectiveRoot(right),
+  ]);
+  const leftToRight = relative(canonicalLeft, canonicalRight);
+  const rightToLeft = relative(canonicalRight, canonicalLeft);
   if (
-    left === right ||
+    canonicalLeft === canonicalRight ||
     (!leftToRight.startsWith('..') && !leftToRight.includes(':')) ||
     (!rightToLeft.startsWith('..') && !rightToLeft.includes(':'))
   ) {
     throw new OperationalBackupError('overlapping_roots', 'Backup roots must not overlap');
+  }
+}
+
+async function canonicalizeProspectiveRoot(path: string): Promise<string> {
+  let ancestor = resolve(path);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      await lstat(ancestor);
+      const canonicalAncestor = await realpath(ancestor);
+      if (!(await stat(canonicalAncestor)).isDirectory()) {
+        throw new OperationalBackupError(
+          'invalid_root',
+          `Backup root ancestor is not a directory: ${ancestor}`,
+        );
+      }
+      return resolve(canonicalAncestor, ...missing.reverse());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(ancestor);
+      if (parent === ancestor) throw error;
+      missing.push(basename(ancestor));
+      ancestor = parent;
+    }
   }
 }
 
