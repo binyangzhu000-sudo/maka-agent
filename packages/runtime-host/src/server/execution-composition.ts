@@ -43,6 +43,7 @@ import {
   openInteractiveArtifactStoreForWrite,
 } from '@maka/storage/artifact-stores';
 import { openInteractiveAutomationAuthorityForWrite } from '@maka/storage/automation-authority';
+import { openInteractiveScheduledTaskStoreForWrite } from '@maka/storage/scheduled-task-store';
 import { openInteractiveDeepResearchStoreForWrite } from '@maka/storage/deep-research-authority';
 import { openInteractiveDailyReviewAuthorityForWrite } from '@maka/storage/daily-review-authority';
 import { openInteractiveGoalAuthorityForWrite } from '@maka/storage/goal-authority';
@@ -80,12 +81,12 @@ import { HostArtifactCoordinator } from './artifact-coordinator.js';
 import { HostAgentGraphCoordinator } from './agent-graph-coordinator.js';
 import { HostAgentGraphExecutionCoordinator } from './agent-graph-execution-coordinator.js';
 import { HostAutomationCoordinator } from './automation-coordinator.js';
-import { HostScheduledTaskAuthority } from './scheduled-task-authority.js';
-import { buildScheduledTaskTool } from '@maka/runtime';
+import { HostScheduledTaskCoordinator } from './scheduled-task-coordinator.js';
 import { recoverClientCapabilityOutcomes } from './client-capability-recovery.js';
 import { HostConnectionEffectCoordinator } from './connection-effect-coordinator.js';
 import { HostConfigurationChangeService } from './configuration-change-service.js';
 import { HostSessionCatalogChangeService } from './session-catalog-change-service.js';
+import { HostScheduledTaskChangeService } from './scheduled-task-change-service.js';
 import { HostConfigurationCoordinator } from './configuration-coordinator.js';
 import { HostContextCoordinator } from './context-coordinator.js';
 import { HostClientCapabilityCoordinator } from './client-capability-coordinator.js';
@@ -206,6 +207,9 @@ export async function createExecutionRuntimeHostComposition(
   let automationStore:
     | Awaited<ReturnType<typeof openInteractiveAutomationAuthorityForWrite>>
     | undefined;
+  let scheduledTaskStore:
+    | Awaited<ReturnType<typeof openInteractiveScheduledTaskStoreForWrite>>
+    | undefined;
   let planStore: Awaited<ReturnType<typeof openInteractivePlanStoreForWrite>> | undefined;
   let deepResearchStore:
     | Awaited<ReturnType<typeof openInteractiveDeepResearchStoreForWrite>>
@@ -253,6 +257,10 @@ export async function createExecutionRuntimeHostComposition(
       context.owner.lease,
     );
     automationStore = openedAutomationStore;
+    const openedScheduledTaskStore = await openInteractiveScheduledTaskStoreForWrite(
+      context.owner.lease,
+    );
+    scheduledTaskStore = openedScheduledTaskStore;
     const openedPlanStore = await openInteractivePlanStoreForWrite(context.owner.lease);
     planStore = openedPlanStore;
     const openedDeepResearchStore = await openInteractiveDeepResearchStoreForWrite(
@@ -409,6 +417,7 @@ export async function createExecutionRuntimeHostComposition(
       | undefined;
     const configurationChanges = new HostConfigurationChangeService();
     const sessionCatalogChanges = new HostSessionCatalogChangeService();
+    const scheduledTaskChanges = new HostScheduledTaskChangeService();
     const projectCatalogChanges = new HostProjectCatalogChangeService();
     const projectMembership = new HostProjectMembershipGate();
     const workspaceResolver = new HostWorkspaceResolver(
@@ -465,7 +474,7 @@ export async function createExecutionRuntimeHostComposition(
     let clientCapabilities: HostClientCapabilityCoordinator | undefined;
     let oauth: HostOAuthCoordinator | undefined;
     let automations: HostAutomationCoordinator | undefined;
-    let scheduledTaskAuthority: HostScheduledTaskAuthority | undefined;
+    let scheduledTasks: HostScheduledTaskCoordinator | undefined;
     let scheduledTaskTool: MakaTool | undefined;
     let goal: HostGoalCoordinator | undefined;
     let deepResearch: HostDeepResearchCoordinator | undefined;
@@ -1076,13 +1085,6 @@ export async function createExecutionRuntimeHostComposition(
       acquireResidency: () => context.acquireResidency('automation'),
       requestDrain: context.requestDrain,
     });
-    // Unified 定时任务 catalog (agent + desktop). Heartbeat stays on Automation.
-    scheduledTaskAuthority = new HostScheduledTaskAuthority({
-      sessions: stores.sessionStore,
-      clientCapabilities,
-    });
-    await scheduledTaskAuthority.ready();
-    scheduledTaskTool = buildScheduledTaskTool({ authority: scheduledTaskAuthority });
     const goalExecutionCoordinator = new HostGoalExecutionCoordinator({
       executions: coordinator,
       runtime: manager,
@@ -1143,6 +1145,19 @@ export async function createExecutionRuntimeHostComposition(
       workspaceResolver,
       requestDrain: context.requestDrain,
     });
+    scheduledTasks = new HostScheduledTaskCoordinator({
+      store: openedScheduledTaskStore,
+      sessions: stores.sessionStore,
+      runtime: manager,
+      root: coordinator,
+      runtimePolicy: runtimePolicyStores,
+      nativeEffects: clientCapabilities,
+      createSession: (input) => sessionCatalog.createForHost(input),
+      changes: scheduledTaskChanges,
+      acquireResidency: () => context.acquireResidency('scheduled-task'),
+      requestDrain: context.requestDrain,
+    });
+    scheduledTaskTool = scheduledTasks.modelTool;
     const externalSessions = new HostExternalSessionCoordinator({
       adapters: createExternalSessionAdapterRegistry(),
       admission: sessionAdmission,
@@ -1346,11 +1361,18 @@ export async function createExecutionRuntimeHostComposition(
           schedulers: () => requireAutomationCoordinator(automations).start(),
         },
         drain: [() => automations?.beginDrain()],
-        close: [
-          () => automations?.close(),
-          () => openedAutomationStore.close(),
-          () => scheduledTaskAuthority?.close(),
-        ],
+        close: [() => automations?.close(), () => openedAutomationStore.close()],
+      }),
+      createRuntimeHostDomainModule({
+        id: 'scheduled-task',
+        handlers: [requireScheduledTasks(scheduledTasks).handlers],
+        recovery: {
+          executions: () => requireScheduledTasks(scheduledTasks).prepareRecovery(),
+          domains: () => requireScheduledTasks(scheduledTasks).recover(),
+          schedulers: () => requireScheduledTasks(scheduledTasks).start(),
+        },
+        drain: [() => scheduledTasks?.beginDrain()],
+        close: [() => scheduledTasks?.close()],
       }),
       createRuntimeHostDomainModule({
         id: 'execution',
@@ -1474,6 +1496,7 @@ export async function createExecutionRuntimeHostComposition(
       configurationChanges,
       projectCatalogChanges,
       sessionCatalogChanges,
+      scheduledTaskChanges,
       releaseConnection: (connectionId: string) => {
         for (const module of domainModules) module.releaseConnection?.(connectionId);
       },
@@ -1548,6 +1571,11 @@ export async function createExecutionRuntimeHostComposition(
     }
     try {
       automationStore?.close();
+    } catch (closeError) {
+      errors.push(closeError);
+    }
+    try {
+      scheduledTaskStore?.close();
     } catch (closeError) {
       errors.push(closeError);
     }
@@ -1677,6 +1705,13 @@ function requireAutomationCoordinator(
   coordinator: HostAutomationCoordinator | undefined,
 ): HostAutomationCoordinator {
   if (!coordinator) throw new Error('Runtime Host Automation coordinator is not composed');
+  return coordinator;
+}
+
+function requireScheduledTasks(
+  coordinator: HostScheduledTaskCoordinator | undefined,
+): HostScheduledTaskCoordinator {
+  if (!coordinator) throw new Error('Runtime Host ScheduledTask coordinator is not composed');
   return coordinator;
 }
 
