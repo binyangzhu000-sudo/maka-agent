@@ -1,6 +1,164 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const SQLITE_SESSION_METADATA_SCHEMA_VERSION = 22;
+export const SQLITE_SESSION_METADATA_SCHEMA_VERSION = 23;
+
+const SESSION_MESSAGES_LOCK_CONNECTION_TRIGGER = `
+  CREATE TRIGGER session_messages_lock_connection
+  AFTER INSERT ON session_messages
+  WHEN NEW.message_type = 'user'
+  BEGIN
+    UPDATE session_metadata
+    SET
+      payload_json = json_set(payload_json, '$.connectionLocked', json('true')),
+      metadata_version = metadata_version + 1,
+      committed_at = MAX(committed_at, NEW.message_ts)
+    WHERE
+      session_id = NEW.session_id
+      AND json_extract(payload_json, '$.connectionLocked') = 0;
+  END
+`;
+
+const SESSION_CATALOG_AFTER_INSERT_TRIGGER = `
+  CREATE TRIGGER IF NOT EXISTS session_catalog_after_insert
+  AFTER INSERT ON session_metadata
+  BEGIN
+    INSERT INTO session_catalog_projection(
+      session_id,
+      activity_at,
+      last_message_at,
+      last_message_preview,
+      is_archived,
+      is_flagged,
+      subagent_parent_session_id
+    ) VALUES (
+      NEW.session_id,
+      COALESCE(NEW.last_message_at, NEW.last_used_at, NEW.created_at),
+      NEW.last_message_at,
+      NULL,
+      NEW.is_archived,
+      NEW.is_flagged,
+      NEW.subagent_parent_session_id
+    );
+
+    UPDATE session_catalog_state
+    SET generation = generation + 1
+    WHERE scope = 'catalog';
+  END
+`;
+
+const SESSION_CATALOG_AFTER_UPDATE_TRIGGER = `
+  CREATE TRIGGER IF NOT EXISTS session_catalog_after_update
+  AFTER UPDATE ON session_metadata
+  BEGIN
+    UPDATE session_catalog_projection
+    SET
+      activity_at = COALESCE(NEW.last_message_at, NEW.last_used_at, NEW.created_at),
+      last_message_at = NEW.last_message_at,
+      is_archived = NEW.is_archived,
+      is_flagged = NEW.is_flagged,
+      subagent_parent_session_id = NEW.subagent_parent_session_id
+    WHERE session_id = NEW.session_id;
+
+    UPDATE session_catalog_label_projection
+    SET activity_at = COALESCE(NEW.last_message_at, NEW.last_used_at, NEW.created_at)
+    WHERE session_id = NEW.session_id;
+
+    UPDATE session_catalog_state
+    SET generation = generation + 1
+    WHERE scope = 'catalog';
+  END
+`;
+
+const SESSION_CATALOG_AFTER_DELETE_TRIGGER = `
+  CREATE TRIGGER IF NOT EXISTS session_catalog_after_delete
+  AFTER DELETE ON session_metadata
+  BEGIN
+    UPDATE session_catalog_state
+    SET generation = generation + 1
+    WHERE scope = 'catalog';
+  END
+`;
+
+const SESSION_CATALOG_LABEL_AFTER_INSERT_TRIGGER = `
+  CREATE TRIGGER session_catalog_label_after_insert
+  AFTER INSERT ON session_metadata_labels
+  BEGIN
+    INSERT OR IGNORE INTO session_catalog_label_projection(session_id, label, activity_at)
+    SELECT NEW.session_id, NEW.label, projection.activity_at
+    FROM session_catalog_projection projection
+    WHERE projection.session_id = NEW.session_id;
+  END
+`;
+
+const SESSION_CATALOG_LABEL_AFTER_DELETE_TRIGGER = `
+  CREATE TRIGGER session_catalog_label_after_delete
+  AFTER DELETE ON session_metadata_labels
+  BEGIN
+    DELETE FROM session_catalog_label_projection
+    WHERE
+      session_id = OLD.session_id
+      AND label = OLD.label
+      AND NOT EXISTS (
+        SELECT 1
+        FROM session_metadata_labels labels
+        WHERE labels.session_id = OLD.session_id
+          AND labels.label = OLD.label
+      );
+  END
+`;
+
+const LOCK_SESSIONS_WITH_USER_MESSAGES = `
+  UPDATE session_metadata
+  SET
+    payload_json = json_set(payload_json, '$.connectionLocked', json('true')),
+    metadata_version = metadata_version + 1,
+    committed_at = MAX(
+      committed_at,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    )
+  WHERE
+    json_extract(payload_json, '$.connectionLocked') = 0
+    AND EXISTS (
+      SELECT 1
+      FROM session_messages messages
+      WHERE
+        messages.session_id = session_metadata.session_id
+        AND messages.message_type = 'user'
+    )
+`;
+
+export const SQLITE_SESSION_METADATA_REQUIRED_TRIGGERS = [
+  {
+    name: 'session_catalog_after_insert',
+    introducedIn: 16,
+    sql: SESSION_CATALOG_AFTER_INSERT_TRIGGER,
+  },
+  {
+    name: 'session_catalog_after_update',
+    introducedIn: 16,
+    sql: SESSION_CATALOG_AFTER_UPDATE_TRIGGER,
+  },
+  {
+    name: 'session_catalog_after_delete',
+    introducedIn: 16,
+    sql: SESSION_CATALOG_AFTER_DELETE_TRIGGER,
+  },
+  {
+    name: 'session_catalog_label_after_insert',
+    introducedIn: 17,
+    sql: SESSION_CATALOG_LABEL_AFTER_INSERT_TRIGGER,
+  },
+  {
+    name: 'session_catalog_label_after_delete',
+    introducedIn: 17,
+    sql: SESSION_CATALOG_LABEL_AFTER_DELETE_TRIGGER,
+  },
+  {
+    name: 'session_messages_lock_connection',
+    introducedIn: 23,
+    sql: SESSION_MESSAGES_LOCK_CONNECTION_TRIGGER,
+  },
+] as const;
 
 export const SQLITE_AGENT_GRAPH_CONTROL_TABLES = [
   'agent_graph_intent_claims',
@@ -570,60 +728,9 @@ const MIGRATIONS: ReadonlyMap<number, string> = new Map([
     CREATE INDEX IF NOT EXISTS session_catalog_labels_by_label_activity
       ON session_catalog_label_projection(label, activity_at DESC, session_id ASC);
 
-    CREATE TRIGGER IF NOT EXISTS session_catalog_after_insert
-    AFTER INSERT ON session_metadata
-    BEGIN
-      INSERT INTO session_catalog_projection(
-        session_id,
-        activity_at,
-        last_message_at,
-        last_message_preview,
-        is_archived,
-        is_flagged,
-        subagent_parent_session_id
-      ) VALUES (
-        NEW.session_id,
-        COALESCE(NEW.last_message_at, NEW.last_used_at, NEW.created_at),
-        NEW.last_message_at,
-        NULL,
-        NEW.is_archived,
-        NEW.is_flagged,
-        NEW.subagent_parent_session_id
-      );
-
-      UPDATE session_catalog_state
-      SET generation = generation + 1
-      WHERE scope = 'catalog';
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS session_catalog_after_update
-    AFTER UPDATE ON session_metadata
-    BEGIN
-      UPDATE session_catalog_projection
-      SET
-        activity_at = COALESCE(NEW.last_message_at, NEW.last_used_at, NEW.created_at),
-        last_message_at = NEW.last_message_at,
-        is_archived = NEW.is_archived,
-        is_flagged = NEW.is_flagged,
-        subagent_parent_session_id = NEW.subagent_parent_session_id
-      WHERE session_id = NEW.session_id;
-
-      UPDATE session_catalog_label_projection
-      SET activity_at = COALESCE(NEW.last_message_at, NEW.last_used_at, NEW.created_at)
-      WHERE session_id = NEW.session_id;
-
-      UPDATE session_catalog_state
-      SET generation = generation + 1
-      WHERE scope = 'catalog';
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS session_catalog_after_delete
-    AFTER DELETE ON session_metadata
-    BEGIN
-      UPDATE session_catalog_state
-      SET generation = generation + 1
-      WHERE scope = 'catalog';
-    END;
+    ${SESSION_CATALOG_AFTER_INSERT_TRIGGER};
+    ${SESSION_CATALOG_AFTER_UPDATE_TRIGGER};
+    ${SESSION_CATALOG_AFTER_DELETE_TRIGGER};
 
     CREATE TRIGGER IF NOT EXISTS session_catalog_label_after_insert
     AFTER INSERT ON session_metadata_labels
@@ -664,29 +771,8 @@ const MIGRATIONS: ReadonlyMap<number, string> = new Map([
     DROP TRIGGER IF EXISTS session_catalog_label_after_insert;
     DROP TRIGGER IF EXISTS session_catalog_label_after_delete;
 
-    CREATE TRIGGER session_catalog_label_after_insert
-    AFTER INSERT ON session_metadata_labels
-    BEGIN
-      INSERT OR IGNORE INTO session_catalog_label_projection(session_id, label, activity_at)
-      SELECT NEW.session_id, NEW.label, projection.activity_at
-      FROM session_catalog_projection projection
-      WHERE projection.session_id = NEW.session_id;
-    END;
-
-    CREATE TRIGGER session_catalog_label_after_delete
-    AFTER DELETE ON session_metadata_labels
-    BEGIN
-      DELETE FROM session_catalog_label_projection
-      WHERE
-        session_id = OLD.session_id
-        AND label = OLD.label
-        AND NOT EXISTS (
-          SELECT 1
-          FROM session_metadata_labels labels
-          WHERE labels.session_id = OLD.session_id
-            AND labels.label = OLD.label
-        );
-    END;
+    ${SESSION_CATALOG_LABEL_AFTER_INSERT_TRIGGER};
+    ${SESSION_CATALOG_LABEL_AFTER_DELETE_TRIGGER};
   `,
   ],
   [
@@ -831,23 +917,14 @@ const MIGRATIONS: ReadonlyMap<number, string> = new Map([
   [
     22,
     `
-    UPDATE session_metadata
-    SET
-      payload_json = json_set(payload_json, '$.connectionLocked', json('true')),
-      metadata_version = metadata_version + 1,
-      committed_at = MAX(
-        committed_at,
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000
-      )
-    WHERE
-      json_extract(payload_json, '$.connectionLocked') = 0
-      AND EXISTS (
-        SELECT 1
-        FROM session_messages messages
-        WHERE
-          messages.session_id = session_metadata.session_id
-          AND messages.message_type = 'user'
-      );
+    ${LOCK_SESSIONS_WITH_USER_MESSAGES};
+  `,
+  ],
+  [
+    23,
+    `
+    ${LOCK_SESSIONS_WITH_USER_MESSAGES};
+    ${SESSION_MESSAGES_LOCK_CONNECTION_TRIGGER};
   `,
   ],
 ]);
@@ -859,14 +936,18 @@ export function configureSqliteSessionMetadataDatabase(db: DatabaseSync): void {
   db.exec('PRAGMA foreign_keys = ON');
 }
 
-export function migrateSqliteSessionMetadataDatabase(db: DatabaseSync): void {
+export function migrateSqliteSessionMetadataDatabase(
+  db: DatabaseSync,
+  options: { transaction?: 'self' | 'caller' } = {},
+): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS session_metadata_schema (
       scope TEXT PRIMARY KEY,
       version INTEGER NOT NULL CHECK (version >= 0)
     )
   `);
-  db.exec('BEGIN IMMEDIATE');
+  const ownsTransaction = options.transaction !== 'caller';
+  if (ownsTransaction) db.exec('BEGIN IMMEDIATE');
   try {
     const current = readSqliteSessionMetadataSchemaVersion(db);
     if (current > SQLITE_SESSION_METADATA_SCHEMA_VERSION) {
@@ -888,9 +969,9 @@ export function migrateSqliteSessionMetadataDatabase(db: DatabaseSync): void {
         ON CONFLICT(scope) DO UPDATE SET version = excluded.version
       `).run(version);
     }
-    db.exec('COMMIT');
+    if (ownsTransaction) db.exec('COMMIT');
   } catch (error) {
-    rollback(db);
+    if (ownsTransaction) rollback(db);
     throw error;
   }
 }
